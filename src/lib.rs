@@ -1,6 +1,8 @@
 extern crate either;
 use either::Either;
 
+#[repr(C)] union f32u32 { f: f32, u: u32 }
+
 #[derive(Clone, Copy)]
 pub struct Float {
     sign: bool,
@@ -17,7 +19,7 @@ pub enum RoundingMode {
     Min,
 }
 
-impl Float {
+impl Float {    
     pub fn default_nan() -> Float {
         Float { sign: true, exp: 0xFF, sig: 0x0040_0000 }
     }
@@ -46,7 +48,7 @@ impl Float {
     pub fn new(value: u32) -> Float {
         let sign = (value & 0x8000_0000) != 0;
         let exp = (value & 0x7FFF_FFFF) >> 23;
-        let sig = (value & 0x007F_FFFF);
+        let sig = value & 0x007F_FFFF;
 
         Float { sign, exp, sig }
     }
@@ -97,11 +99,8 @@ impl Float {
 
         let exp = exp_a + exp_b - BIAS_F32;
         let sig = {
-            let mul_result = sig_a as u64 * sig_b as u64;
-
-            println!("mul_result: 0x{:016x}", mul_result);
-            let shifted = Float::right_shift_64(mul_result, (SIG_WIDTH_F32 - ROUND_WIDTH) as u64) as u32;
-            println!("shifted: 0x{:016x}", shifted);
+            let mul_result = sig_a as u64 * sig_b as u64;            
+            let shifted = Float::right_shift_64(mul_result, (SIG_WIDTH_F32 - ROUND_WIDTH) as u64) as u32;            
             shifted
         };
 
@@ -121,8 +120,10 @@ impl Float {
         let round_bits = sig & ROUND_MASK;
 
         let (exp, sig) =
-            if exp < 0 {
-                let sig = Float::right_shift_32(sig, -exp as u32);
+            if exp < 0 {                                
+                let shamt = -exp as u32 + 1;
+                let sig = Float::right_shift_32(sig, shamt);
+
                 (0, sig)
             } else if exp >= 0xFF || (exp == 0xFE && sig + round_inc >= 0x0800_0000) {
                 let infinite =
@@ -135,26 +136,18 @@ impl Float {
                 (exp as u32, sig)
             };
 
-        let sig = sig + round_inc;
-        println!("rounded: 0x{:016x}", sig);
-        let (exp, sig) = if sig >= 0x0800_0000 { (exp + 1, sig >> 1) } else { (exp, sig) };
-        println!("normalized: 0x{:016x}", sig);
+        let (exp, sig) = Float::normalize(exp, sig);
+        let sig = sig + round_inc;        
+        let (exp, sig) = Float::normalize(exp, sig);
+        
         let sig = (sig >> ROUND_WIDTH) & !((round_bits == 0x04 && is_near_even) as u32) & SIG_MASK_F32;
 
         Float { sign, exp, sig }
     }
 
-    // For now, frac has 27 or more bit length.
-    // If bit length is more than 27, this procedure fixes length into 27.
-    //
-    // TODO: frac length is 27 or more only if two floating point value are not subnormal values.
-    //       So, need implementation to deal with it.
-    fn normalize(exp: u32, frac: u32) -> (u32, u32) {
-        let shift_diff = 5 - frac.leading_zeros();
-        let frac = Float::right_shift_32(frac, shift_diff);
-        let exp = exp + shift_diff;
-
-        (exp, frac)
+    fn normalize(exp: u32, sig: u32) -> (u32, u32) {
+        if sig >= 0x0800_0000 { Float::normalize(exp + 1, sig >> 1) }
+        else                  { (exp, sig) }
     }
 
     fn right_shift_32(sig: u32, shamt: u32) -> u32 {
@@ -177,29 +170,112 @@ impl Float {
     }
 }
 
+impl From<f32> for Float {
+    fn from(f: f32) -> Float {
+        let u = unsafe { (f32u32 { f }).u };
+        Float::from(u)
+    }
+}
+
+impl From<u32> for Float {
+    fn from(u: u32) -> Float {
+        Float::from(u as f32)
+    }
+}
+
+impl Into<f32> for Float {
+    fn into(self) -> f32 {
+        let sign = (self.sign as u32) << 31;
+        let exp = self.exp << 23;
+        let sig = self.sig;
+
+        let uni = f32u32 { u: sign | exp | sig };
+        unsafe { uni.f }
+    }
+}
+
 #[cfg(test)]
 mod test {
-    use crate::Float;
+    extern crate rand;
 
-    fn mult1() {
+    use crate::{ Float, f32u32 };
+    use rand::{ rngs::StdRng, Rng, SeedableRng };
+    
+    #[repr(C)] 
+    #[derive(Clone, Copy)]
+    struct float32_t { v: u32 }
+
+    impl Into<f32> for float32_t {
+        fn into(self) -> f32 {
+            let uni = f32u32 { u: self.v };
+            unsafe { uni.f }
+        }
+    }
+
+    impl From<f32> for float32_t {
+        fn from(f: f32) -> float32_t {
+            let uni = f32u32 { f };
+            float32_t { v: unsafe { uni.u } }
+        }
+    }
+
+    impl From<u32> for float32_t {
+        fn from(u: u32) -> float32_t {
+            float32_t { v: u }
+        }
+    }
+
+    #[link(name="softfloat")]
+    extern "C" {
+        fn f32_mul(a: float32_t, b: float32_t) -> float32_t;
+    }    
+
+    #[test]
+    fn mult() {
         let a = Float { sign: false, exp: 0x7F, sig: 0 };
         let b = Float { sign: false, exp: 0x67, sig: 0x12345 };
         let c = a.mul(b);
 
         assert_eq!(c.sign, false);
         assert_eq!(c.exp,  0x67);
-        assert_eq!(c.sig,  0x12345, "0x{:08x} != 0x{:08x}", c.sig, 0x12345);
-    }
+        assert_eq!(c.sig,  0x12345, "0x{:08x} != 0x{:08x}", c.sig, 0x12345);        
+    }    
 
     #[test]
-    fn mult2() {
-        let a = Float { sign: false, exp: 0x7F, sig: 0x7F_FFFF };
-        let b = Float { sign: false, exp: 0x67, sig: 0x7F_FFFF };
-        let c = a.mul(b);
+    fn mult_with_softfloat() {
+        let mut rng: StdRng = SeedableRng::seed_from_u64(0);
+        let mut is_failure = false;
 
-        assert_eq!(c.sign, false);
-        panic!("0x{:08x}", c.sig);
-    }
+        for _ in 0..10 {
+            let a: u32 = rng.gen();
+            let b: u32 = rng.gen();
+
+            let a_float = Float::new(a);
+            let b_float = Float::new(b);
+            let a_soft  = float32_t::from(a);
+            let b_soft  = float32_t::from(b);
+
+            let c_float = a_float.mul(b_float);
+            let c_soft  = unsafe { f32_mul(a_soft, b_soft) };
+
+            let c_soft: f32 = c_soft.into();
+            let c_float: f32 = c_float.into();
+
+            if c_soft != c_float {
+                if !is_failure {
+                    println!("{:>10}, {:>10}, {:>10}, {:>10}", "a", "b", "expect", "actual");
+                }
+
+                is_failure = true;                
+                let c_soft_u32  = unsafe { (f32u32 { f: c_soft  }).u };
+                let c_float_u32 = unsafe { (f32u32 { f: c_float }).u };
+
+                println!("0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}", a, b, c_soft_u32, c_float_u32);
+            }    
+        }
+                
+        assert!(!is_failure, "test is failure");
+    }    
 }
 
 const BIAS_F32: i32 = 127;
