@@ -53,8 +53,90 @@ impl Float {
         Float { sign, exp, sig }
     }
 
+    pub fn add(self, other: Float) -> Float {
+        self.add_with_mode(other, RoundingMode::NearEven)
+    }
+
+    pub fn sub(self, other: Float) -> Float {
+        self.sub_with_mode(other, RoundingMode::NearEven)
+    }
+
     pub fn mul(self, other: Float) -> Float {
         self.mul_with_mode(other, RoundingMode::NearEven)
+    }
+
+    pub fn add_with_mode(self, other: Float, mode: RoundingMode) -> Float {
+        if self.sign ^ other.sign { self.sub_impl(other, mode) }
+        else                      { self.add_impl(other, mode) }
+    }
+
+    pub fn sub_with_mode(self, other: Float ,mode: RoundingMode) -> Float {
+        if self.sign ^ other.sign { self.add_impl(other, mode) }
+        else                      { self.sub_impl(other, mode) }
+    }
+    
+    fn add_impl(self, other: Float, mode: RoundingMode) -> Float {        
+        let (exp_diff, fa, fb) = 
+            if self.exp < other.exp { (other.exp - self.exp, other, self) }
+            else                    { (self.exp - other.exp, self, other) };
+
+        let sign = self.sign;
+
+        let sig_a_hidden = if fa.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
+        let sig_b_hidden = if fb.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
+        let sig_a = if fa.exp == 0 { fa.sig << (ROUND_WIDTH + 1) } else { (sig_a_hidden | fa.sig) << ROUND_WIDTH };
+        let sig_b = if fb.exp == 0 { fb.sig << (ROUND_WIDTH + 1) } else { (sig_b_hidden | fb.sig) << ROUND_WIDTH };
+        let sig_b = Float::right_shift_32(sig_b, exp_diff);
+        
+        if fa.exp == 0 && fb.exp == 0 { 
+            let fc_sig = fa.sig + fb.sig;
+            let exp = fc_sig >> 23;
+            let sig = fc_sig & 0x007F_FFFF;
+
+            return Float { sign: self.sign, exp, sig }
+        }
+
+        if fa.exp == 0xFF && fb.exp == 0xFF {
+            if fa.sig != 0 || fb.sig != 0 { return Float::propagate_nan(self, other) }
+            return self
+        }
+
+        if fa.exp == 0xFF {
+            if fa.sig != 0 { return Float::propagate_nan(self, other) }
+            return Float { sign, exp: 0xFF, sig: 0x0000_0000 }
+        }
+
+        let exp = fa.exp;
+        let sig = sig_a + sig_b;
+
+        Float::pack_float32(sign, exp as i32, sig, mode)
+    }
+
+    fn sub_impl(self, other: Float, mode: RoundingMode) -> Float {
+        let (exp_diff, fa, fb, subtract): (_, _, _, Box<dyn Fn(i32, i32) -> i32>) = 
+            if self.exp < other.exp { (other.exp - self.exp, other, self, Box::new(|a: i32, b: i32| b - a)) }
+            else                    { (self.exp - other.exp, self, other, Box::new(|a: i32, b: i32| a - b)) };
+        
+        let sig_a_hidden = if fa.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
+        let sig_b_hidden = if fb.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
+        let sig_a = (sig_a_hidden | fa.sig) << ROUND_WIDTH;
+        let sig_b = (sig_b_hidden | fb.sig) << ROUND_WIDTH;
+        let sig_b = Float::right_shift_32(sig_b, exp_diff);
+        
+        if fa.exp == 0xFF && fb.exp == 0xFF { 
+            if fa.sig != 0 || fb.sig != 0 { return Float::propagate_nan(self, other) }
+            return Float::default_nan()
+        }        
+
+        let sig = subtract(sig_a as i32, sig_b as i32);
+
+        if sig == 0 { return Float::zero(mode == RoundingMode::Min) }
+
+        let sign = if sig > 0 { self.sign } else { !self.sign };        
+        let (exp, sig) = Float::normalize_subnormal_f32(sig as u32);
+        let exp = fa.exp as i32 + exp;
+
+        Float::pack_float32(sign, exp, sig, mode)
     }
 
     pub fn mul_with_mode(self, other: Float, mode: RoundingMode) -> Float {
@@ -105,7 +187,7 @@ impl Float {
         };
 
         Float::pack_float32(sign, exp, sig, mode)
-    }
+    }    
 
     fn pack_float32(sign: bool, exp: i32, sig: u32, mode: RoundingMode) -> Float {
         let is_near_even = mode == RoundingMode::NearEven;
@@ -116,38 +198,48 @@ impl Float {
             RoundingMode::Max      => if sign { 0x00 } else { 0x07 },
             RoundingMode::Min      => if sign { 0x07 } else { 0x00 },
         };
-
-        let round_bits = sig & ROUND_MASK;
-
+        
         let (exp, sig) =
-            if exp < 0 {                                
+            if exp <= 0 {                 
                 let shamt = -exp as u32 + 1;
-                let sig = Float::right_shift_32(sig, shamt);
-
+                let sig = Float::right_shift_32(sig, shamt);        
+            
                 (0, sig)
-            } else if exp >= 0xFF || (exp == 0xFE && sig + round_inc >= 0x0800_0000) {
-                let infinite =
-                    if round_inc == 0 { Float { sign, exp: 0xFE, sig: 0x007F_FFFF } }
-                    else              { Float::infinite(sign) };
-
-                return infinite;
-
             } else {
                 (exp as u32, sig)
-            };
-
-        let (exp, sig) = Float::normalize(exp, sig);
-        let sig = sig + round_inc;        
-        let (exp, sig) = Float::normalize(exp, sig);
+            };                
         
-        let sig = (sig >> ROUND_WIDTH) & !((round_bits == 0x04 && is_near_even) as u32) & SIG_MASK_F32;
+        let (exp, sig) = match Float::normalize(sign, exp, sig, round_inc) {
+            either::Left(float) => return float,
+            either::Right(pair) => pair,
+        };
+
+        let round_bits = sig & ROUND_MASK;        
+        let sig = sig + round_inc;
+
+        let (exp, sig) = match Float::normalize(sign, exp, sig, round_inc) {
+            either::Left(float) => return float,
+            either::Right(pair) => pair,
+        };        
+        
+        let sig = (sig >> ROUND_WIDTH) & !((round_bits == 0x04 && is_near_even) as u32) & SIG_MASK_F32;        
 
         Float { sign, exp, sig }
     }
 
-    fn normalize(exp: u32, sig: u32) -> (u32, u32) {
-        if sig >= 0x0800_0000 { Float::normalize(exp + 1, sig >> 1) }
-        else                  { (exp, sig) }
+    fn normalize(sign: bool, exp: u32, sig: u32, round_inc: u32) -> Either<Float, (u32, u32)> {
+        match (exp, sig) {
+            (exp, _) if exp >= 0xFF => {
+                let infinite =
+                    if round_inc == 0 { Float { sign, exp: 0xFE, sig: 0x007F_FFFF }}
+                    else              { Float { sign, exp: 0xFF, sig: 0x0000_0000 }};
+
+                either::Left(infinite)
+            }
+            ( exp, sig) if sig >= 0x0800_0000 => Float::normalize(sign, exp + 1, Float::right_shift_32(sig, 1), round_inc),
+            (0x00, sig) if sig >= 0x0400_0000 => Float::normalize(sign, exp + 1, sig, round_inc),
+            ( exp, sig)                       => either::Right((exp, sig))
+        }
     }
 
     fn right_shift_32(sig: u32, shamt: u32) -> u32 {
@@ -228,17 +320,7 @@ mod test {
     #[link(name="softfloat")]
     extern "C" {
         fn f32_mul(a: float32_t, b: float32_t) -> float32_t;
-    }    
-
-    #[test]
-    fn mult() {
-        let a = Float { sign: false, exp: 0x7F, sig: 0 };
-        let b = Float { sign: false, exp: 0x67, sig: 0x12345 };
-        let c = a.mul(b);
-
-        assert_eq!(c.sign, false);
-        assert_eq!(c.exp,  0x67);
-        assert_eq!(c.sig,  0x12345, "0x{:08x} != 0x{:08x}", c.sig, 0x12345);        
+        fn f32_add(a: float32_t, b: float32_t) -> float32_t;
     }    
 
     #[test]
@@ -246,35 +328,122 @@ mod test {
         let mut rng: StdRng = SeedableRng::seed_from_u64(0);
         let mut is_failure = false;
 
-        for _ in 0..10 {
+        for _ in 0..10000000 {
             let a: u32 = rng.gen();
             let b: u32 = rng.gen();
 
-            let a_float = Float::new(a);
-            let b_float = Float::new(b);
-            let a_soft  = float32_t::from(a);
-            let b_soft  = float32_t::from(b);
-
-            let c_float = a_float.mul(b_float);
-            let c_soft  = unsafe { f32_mul(a_soft, b_soft) };
-
-            let c_soft: f32 = c_soft.into();
-            let c_float: f32 = c_float.into();
+            let (c_soft, c_float) = mult(a, b);
 
             if c_soft != c_float {
                 if !is_failure {
                     println!("{:>10}, {:>10}, {:>10}, {:>10}", "a", "b", "expect", "actual");
                 }
 
-                is_failure = true;                
-                let c_soft_u32  = unsafe { (f32u32 { f: c_soft  }).u };
-                let c_float_u32 = unsafe { (f32u32 { f: c_float }).u };
+                is_failure = true;                                
 
-                println!("0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}", a, b, c_soft_u32, c_float_u32);
+                println!("0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}", a, b, c_soft, c_float);
             }    
         }
                 
         assert!(!is_failure, "test is failure");
+    }
+
+    #[test]
+    fn mult_0x90ba4d56_0xaf16e52d() {
+        mult_once(0x90ba4d56, 0xaf16e52d)
+    }
+    
+    #[test]
+    fn mult_0xf942bc00_0x993de000() {        
+        mult_once(0xf942bc00, 0x993de000);
+    }
+
+    #[test]
+    fn mult_0x6ecab647_0x8c400000() {
+        mult_once(0x6eca_b647, 0x8c40_0000)
+    }
+
+    #[test]
+    fn mult_0x03698281_0x7c15b40f() {
+        mult_once(0x03698281, 0x7c15b40f)
+    }
+
+    #[test]
+    fn add_with_softfloat() {
+        let mut rng: StdRng = SeedableRng::seed_from_u64(0);
+        let mut is_failure = false;
+
+        for _ in 0..10000000 {
+            let a: u32 = rng.gen();
+            let b: u32 = rng.gen();
+
+            let (c_soft, c_float) = add(a, b);
+
+            if c_soft != c_float {
+                if !is_failure {
+                    println!("{:>10}, {:>10}, {:>10}, {:>10}", "a", "b", "expect", "actual");
+                }
+
+                is_failure = true;                                
+
+                println!("0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}", a & 0x7FFF_FFFF, b & 0x7FFF_FFFF, c_soft, c_float);
+            }    
+        }
+                
+        assert!(!is_failure, "test is failure");
+    }
+
+    #[test]
+    fn add_0x000c90f2_0x01997658() {
+       add_once(0x000c90f2, 0x01997658);
+    }
+
+    #[test]
+    fn add_0x0024a100_0x007c7c6f() {
+        add_once(0x0024a100, 0x007c7c6f);
+    } 
+
+    fn mult(a: u32, b: u32) -> (u32, u32) {
+        let a_float = Float::new(a);
+        let b_float = Float::new(b);
+        let a_soft  = float32_t::from(a);
+        let b_soft  = float32_t::from(b);
+
+        let c_float = a_float.mul(b_float);
+        let c_soft  = unsafe { f32_mul(a_soft, b_soft) };
+
+        let c_soft: u32  = unsafe { (f32u32 { f: c_soft.into() }).u };
+        let c_float: u32 = unsafe { (f32u32 { f: c_float.into() }).u };
+
+        (c_soft, c_float)
+    }
+
+    fn mult_once(a: u32, b: u32) {
+        let (c_soft, c_float) = mult(a, b);
+        assert_eq!(c_soft, c_float, "0x{:08x}, 0x{:08x}", c_soft, c_float);
+    }
+
+    fn add(a: u32, b: u32) -> (u32, u32) {
+        let a = a & 0x7FFF_FFFF;
+        let b = b & 0x7FFF_FFFF;
+
+        let a_float = Float::new(a);
+        let b_float = Float::new(b);
+        let a_soft  = float32_t::from(a);
+        let b_soft  = float32_t::from(b);
+
+        let c_float = a_float.add(b_float);
+        let c_soft  = unsafe { f32_add(a_soft, b_soft) };
+
+        let c_soft: u32  = unsafe { (f32u32 { f: c_soft.into() }).u };
+        let c_float: u32 = unsafe { (f32u32 { f: c_float.into() }).u };
+
+        (c_soft, c_float)
+    }
+
+    fn add_once(a: u32, b: u32) {
+        let (c_soft, c_float) = add(a, b);
+        assert_eq!(c_soft, c_float, "0x{:08x}, 0x{:08x}", c_soft, c_float);
     }    
 }
 
