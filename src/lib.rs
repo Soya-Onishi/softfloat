@@ -1,5 +1,9 @@
+mod exception;
+
 extern crate either;
 use either::Either;
+
+use exception::*;
 
 #[repr(C)]
 union f32u32 {
@@ -56,20 +60,59 @@ impl Float {
         self.exp == 0xFF && (self.sig & 0x003F_FFFF != 0) && (self.sig & 0x0040_0000 == 0)
     }
 
-    fn propagate_nan(a: Float, b: Float) -> Float {
-        if a.is_nan() {
-            Float {
-                sign: a.sign,
-                exp: a.exp,
-                sig: a.sig | 0x0040_0000,
+    fn propagate_nan(a: Float, b: Float) -> (Float, Exception) {
+        let a_sig_qnan = Float {
+            sign: a.sign,
+            exp: a.exp,
+            sig: a.sig | 0x0040_0000,
+        };
+        let b_sig_qnan = Float {
+            sign: b.sign,
+            exp: b.exp,
+            sig: b.sig | 0x0040_0000,
+        };
+        let return_large_magnitude = || -> Float {
+            let a_mag = a.sig | (a.exp << 23);
+            let b_mag = b.sig | (b.exp << 23);
+            if a_mag > b_mag {
+                a_sig_qnan
+            } else if a_mag < b_mag {
+                b_sig_qnan
+            } else {
+                if a.sign {
+                    b_sig_qnan
+                } else {
+                    a_sig_qnan
+                }
             }
+        };
+
+        let nan = match (a.is_signal_nan(), b.is_signal_nan()) {
+            (true, true) => return_large_magnitude(),
+            (false, false) => return_large_magnitude(),
+            (true, false) => {
+                if b.is_nan() {
+                    b_sig_qnan
+                } else {
+                    a_sig_qnan
+                }
+            }
+            (false, true) => {
+                if a.is_nan() {
+                    a_sig_qnan
+                } else {
+                    b_sig_qnan
+                }
+            }
+        };
+
+        let exception = if a.is_signal_nan() | b.is_signal_nan() {
+            Exception(EXCEPTION_INVALID)
         } else {
-            Float {
-                sign: b.sign,
-                exp: b.exp,
-                sig: b.sig | 0x0040_0000,
-            }
-        }
+            Exception(EXCEPTION_NONE)
+        };
+
+        (nan, exception)
     }
 
     pub fn new(value: u32) -> Float {
@@ -80,19 +123,19 @@ impl Float {
         Float { sign, exp, sig }
     }
 
-    pub fn add(self, other: Float) -> Float {
+    pub fn add(self, other: Float) -> (Float, Exception) {
         self.add_with_mode(other, RoundingMode::NearEven)
     }
 
-    pub fn sub(self, other: Float) -> Float {
+    pub fn sub(self, other: Float) -> (Float, Exception) {
         self.sub_with_mode(other, RoundingMode::NearEven)
     }
 
-    pub fn mul(self, other: Float) -> Float {
+    pub fn mul(self, other: Float) -> (Float, Exception) {
         self.mul_with_mode(other, RoundingMode::NearEven)
     }
 
-    pub fn add_with_mode(self, other: Float, mode: RoundingMode) -> Float {
+    pub fn add_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
         if self.sign ^ other.sign {
             self.sub_impl(other, mode)
         } else {
@@ -100,7 +143,7 @@ impl Float {
         }
     }
 
-    pub fn sub_with_mode(self, other: Float, mode: RoundingMode) -> Float {
+    pub fn sub_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
         if self.sign ^ other.sign {
             self.add_impl(other, mode)
         } else {
@@ -108,7 +151,7 @@ impl Float {
         }
     }
 
-    fn add_impl(self, other: Float, mode: RoundingMode) -> Float {
+    fn add_impl(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
         let (exp_diff, fa, fb) = if self.exp < other.exp {
             (other.exp - self.exp, other, self)
         } else {
@@ -128,109 +171,99 @@ impl Float {
         } else {
             (sig_b_hidden | fb.sig) << ROUND_WIDTH
         };
-        let sig_b = Float::right_shift_32(sig_b, exp_diff);
 
         if fa.exp == 0 && fb.exp == 0 {
             let fc_sig = fa.sig + fb.sig;
             let exp = fc_sig >> 23;
             let sig = fc_sig & 0x007F_FFFF;
 
-            return Float {
-                sign: self.sign,
-                exp,
-                sig,
+            return (
+                Float {
+                    sign: self.sign,
+                    exp,
+                    sig,
+                },
+                Exception(EXCEPTION_NONE),
+            );
+        }
+
+        if fa.exp == 0xFF || fb.exp == 0xFF {
+            let result = if (fa.exp == 0xFF && fa.sig != 0) || (fb.exp == 0xFF && fb.sig != 0) {
+                Float::propagate_nan(self, other)
+            } else if fa.exp == 0xFF {
+                (fa, Exception(EXCEPTION_NONE))
+            } else {
+                (fb, Exception(EXCEPTION_NONE))
             };
-        }
 
-        if fa.exp == 0xFF && fb.exp == 0xFF {
-            if fa.sig != 0 || fb.sig != 0 {
-                return Float::propagate_nan(self, other);
-            }
-            return self;
+            return result;
         }
-
-        if fa.exp == 0xFF {
-            if fa.sig != 0 {
-                return Float::propagate_nan(self, other);
-            }
-            return Float {
-                sign,
-                exp: 0xFF,
-                sig: 0x0000_0000,
-            };
-        }
-
         let exp = fa.exp;
+        let sig_b = Float::right_shift_32(sig_b, exp_diff);
         let sig = sig_a + sig_b;
 
         Float::pack_float32(sign, exp as i32, sig, mode)
     }
 
-    fn sub_impl(self, other: Float, mode: RoundingMode) -> Float {
-        let (exp_diff, fa, fb, subtract): (_, _, _, Box<dyn Fn(i32, i32) -> i32>) =
-            if self.exp < other.exp {
-                (
-                    other.exp - self.exp,
-                    other,
-                    self,
-                    Box::new(|a: i32, b: i32| b - a),
-                )
+    fn sub_impl(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
+        let (exp_diff, fa, fb, sign): (_, _, _, bool) = if self.exp < other.exp {
+            (other.exp - self.exp, other, self, !self.sign)
+        } else if self.exp > other.exp {
+            (self.exp - other.exp, self, other, self.sign)
+        } else {
+            if self.sig < other.sig {
+                (0, other, self, !self.sign)
             } else {
-                (
-                    self.exp - other.exp,
-                    self,
-                    other,
-                    Box::new(|a: i32, b: i32| a - b),
-                )
-            };
+                (0, self, other, self.sign)
+            }
+        };
         let sig_a_hidden = if fa.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
         let sig_b_hidden = if fb.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
         let sig_a = (sig_a_hidden | fa.sig) << ROUND_WIDTH;
         let sig_b = (sig_b_hidden | fb.sig) << ROUND_WIDTH;
         let sig_b = Float::right_shift_32(sig_b, exp_diff);
 
-        if fa.exp == 0xFF && fb.exp == 0xFF {
-            if fa.sig != 0 || fb.sig != 0 {
-                return Float::propagate_nan(self, other);
+        // there is no need to calculate fb.exp == 0xFF
+        // because fa.exp >= fb.exp must be true.
+        if fa.exp == 0xFF || fb.exp == 0xFF {
+            if (fa.exp == 0xFF && fa.sig != 0) || (fb.exp == 0xFF && fb.sig != 0) {
+                return Float::propagate_nan(fa, fb);
             }
-            return Float::default_nan();
+            return (Float::default_nan(), Exception(EXCEPTION_INVALID));
         }
-        let sig = subtract(sig_a as i32, sig_b as i32);
+        let sig = sig_a - sig_b;
 
         if sig == 0 {
-            return Float::zero(mode == RoundingMode::Min);
+            return (
+                Float::zero(mode == RoundingMode::Min),
+                Exception(EXCEPTION_NONE),
+            );
         }
-
-        let sign = if sig > 0 { self.sign } else { !self.sign };
-        let (exp, sig) = Float::normalize_subnormal_f32(sig as u32);
+        let (exp, sig) = Float::normalize_subnormal_f32(sig);
         let exp = fa.exp as i32 + exp;
 
         Float::pack_float32(sign, exp, sig, mode)
     }
 
-    pub fn mul_with_mode(self, other: Float, mode: RoundingMode) -> Float {
+    pub fn mul_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
         // TODO: implement subnormal pattern
 
-        let try_mul_inf_or_nan = |sign: bool, f: Float, g: Float| -> Option<Float> {
-            if f.exp != 0xFF {
-                return None;
-            };
-            if f.sig != 0 {
-                return Some(Float::propagate_nan(f, g));
-            }
-
-            if g.exp | g.sig == 0 {
-                Some(Float::default_nan())
-            } else {
-                Some(Float::infinite(sign))
+        let try_mul_inf_or_nan = |sign: bool, f: Float, g: Float| -> Option<(Float, Exception)> {
+            match ((f.exp, f.sig), (g.exp, g.sig)) {
+                ((0xFF, 0), (0x00, 0)) => {
+                    Some((Float::default_nan(), Exception(EXCEPTION_INVALID)))
+                }
+                ((0xFF, 0), _) => Some((Float::infinite(sign), Exception(EXCEPTION_NONE))),
+                ((0xFF, _), _) => Some(Float::propagate_nan(f, g)),
+                _ => None,
             }
         };
 
-        let make_exp_sig = |sign: bool, f: Float| -> Either<Float, (i32, u32)> {
+        let make_exp_sig = |sign: bool, f: Float| -> Either<(Float, Exception), (i32, u32)> {
             if f.exp != 0 {
                 Either::Right((f.exp as i32, f.sig | HIDDEN_SIGNIFICAND))
             } else if f.sig == 0 {
-                Either::Left(Float::zero(sign))
+                Either::Left((Float::zero(sign), Exception(EXCEPTION_NONE)))
             } else {
                 Either::Right(Float::normalize_subnormal_f32(f.sig))
             }
@@ -270,7 +303,7 @@ impl Float {
         Float::pack_float32(sign, exp, sig, mode)
     }
 
-    fn pack_float32(sign: bool, exp: i32, sig: u32, mode: RoundingMode) -> Float {
+    fn pack_float32(sign: bool, exp: i32, sig: u32, mode: RoundingMode) -> (Float, Exception) {
         let is_near_even = mode == RoundingMode::NearEven;
         let round_inc = match mode {
             RoundingMode::NearEven => 0x04,
@@ -300,8 +333,9 @@ impl Float {
         } else {
             (exp as u32, sig)
         };
+
         let (exp, sig) = match Float::normalize(sign, exp, sig, round_inc) {
-            either::Left(float) => return float,
+            either::Left(result) => return result,
             either::Right(pair) => pair,
         };
 
@@ -309,16 +343,33 @@ impl Float {
         let sig = sig + round_inc;
 
         let (exp, sig) = match Float::normalize(sign, exp, sig, round_inc) {
-            either::Left(float) => return float,
+            either::Left(result) => return result,
             either::Right(pair) => pair,
+        };
+
+        let exception = if round_bits != 0 {
+            let underflow = if exp == 0 {
+                Exception(EXCEPTION_UNDERFLOW)
+            } else {
+                Exception(EXCEPTION_NONE)
+            };
+            underflow | Exception(EXCEPTION_INEXACT)
+        } else {
+            Exception(EXCEPTION_NONE)
         };
 
         let sig =
             (sig >> ROUND_WIDTH) & !((round_bits == 0x04 && is_near_even) as u32) & SIG_MASK_F32;
-        Float { sign, exp, sig }
+
+        (Float { sign, exp, sig }, exception)
     }
 
-    fn normalize(sign: bool, exp: u32, sig: u32, round_inc: u32) -> Either<Float, (u32, u32)> {
+    fn normalize(
+        sign: bool,
+        exp: u32,
+        sig: u32,
+        round_inc: u32,
+    ) -> Either<(Float, Exception), (u32, u32)> {
         match (exp, sig) {
             (exp, _) if exp >= 0xFF => {
                 let infinite = if round_inc == 0 {
@@ -335,7 +386,7 @@ impl Float {
                     }
                 };
 
-                either::Left(infinite)
+                either::Left((infinite, Exception(EXCEPTION_OVERFLOW | EXCEPTION_INEXACT)))
             }
             (exp, sig) if sig >= 0x0800_0000 => {
                 Float::normalize(sign, exp + 1, Float::right_shift_32(sig, 1), round_inc)
@@ -362,12 +413,12 @@ impl Float {
     }
 
     fn normalize_subnormal_f32(sig: u32) -> (i32, u32) {
-        let shamt = sig.leading_zeros() - 8;
+        let shamt = sig.leading_zeros() - 5;
 
         // When floating point is 1.xx, exp must be 1 or more.
         // This means if sig.leading_zeros() - 8 == 0, exp must be 1.
         // That is why, left side of tuple must be 1 - shamt, not -shamt.
-        (1 - shamt as i32, sig << shamt)
+        (-(shamt as i32), sig << shamt)
     }
 }
 
@@ -400,9 +451,13 @@ impl Into<f32> for Float {
 #[cfg(test)]
 mod test {
     extern crate rand;
+    extern crate regex;
 
     use crate::{f32u32, Float};
     use rand::{rngs::StdRng, Rng, SeedableRng};
+    use regex::Regex;
+    use std::process::Command;
+    use std::str::from_utf8;
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -432,12 +487,90 @@ mod test {
         }
     }
 
+    /*
     #[link(name = "softfloat")]
     extern "C" {
         fn f32_mul(a: float32_t, b: float32_t) -> float32_t;
         fn f32_add(a: float32_t, b: float32_t) -> float32_t;
     }
+    */
 
+    #[test]
+    #[ignore]
+    fn f32_add_test() -> std::io::Result<()> {
+        let output = Command::new("testfloat_gen")
+            .arg("-precision32")
+            .arg("f32_add")
+            .output()?;
+        assert_eq!(output.status.code(), Some(0));
+        assert!(output.stderr.is_empty());
+        let re = Regex::new(r"([0-9A-Fa-f]{8}) ([0-9A-Fa-f]{8}) ([0-9A-Fa-f]{8}) ([0-9A-Fa-f]{2})")
+            .unwrap();
+
+        let result = from_utf8(output.stdout.as_ref())
+            .unwrap()
+            .split('\n')
+            .into_iter()
+            .map(|line| re.captures(line))
+            .filter(|caps| caps.is_some())
+            .map(|caps| caps.unwrap())
+            .map(|caps| {
+                let a = u32::from_str_radix(caps.get(1).unwrap().as_str(), 16).unwrap();
+                let b = u32::from_str_radix(caps.get(2).unwrap().as_str(), 16).unwrap();
+                let c = u32::from_str_radix(caps.get(3).unwrap().as_str(), 16).unwrap();
+                let exceptions = u8::from_str_radix(caps.get(4).unwrap().as_str(), 16).unwrap();
+
+                (a, b, c, exceptions)
+            })
+            .map(|(a, b, c, exceptions)| {
+                let af = Float::new(a);
+                let bf = Float::new(b);
+                let (res, exp) = af.add(bf);
+
+                let uni = f32u32 { f: res.into() };
+                let res = unsafe { uni.u };
+
+                (a, b, (c, res), (exceptions, exp.0))
+            })
+            .filter(|(_, _, (c, res), (exceptions, exp))| c != res || exceptions != exp)
+            .collect::<Vec<(u32, u32, (u32, u32), (u8, u8))>>();
+
+        if result.is_empty() {
+            Ok(())
+        } else {
+            println!(
+                "{:>10}, {:>10}, {:>10}, {:>10}, {:>16}, {:>16}",
+                "a", "b", "c_expect", "c_actual", "exception_expect", "exception_actual"
+            );
+            result
+                .iter()
+                .for_each(|(a, b, (c_expect, c_actual), (e_expect, e_actual))| {
+                    println!(
+                        "0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}, {:02x}, {:02x}",
+                        a, b, c_expect, c_actual, e_expect, e_actual
+                    )
+                });
+            panic!("test_f32_add failed({} failed)", result.len());
+        }
+    }
+
+    #[test]
+    fn add_0xfffffffe_0xffffffff() {
+        let a = Float::new(0xffff_fffe);
+        let b = Float::new(0xffff_ffff);
+
+        a.add(b);
+    }
+
+    #[test]
+    fn add_0xff800001_0xffffffff() {
+        let a = Float::new(0xff80_0001);
+        let b = Float::new(0xffff_ffff);
+
+        a.add(b);
+    }
+
+    /*
     #[test]
     fn mult_with_softfloat() {
         let mut rng: StdRng = SeedableRng::seed_from_u64(0);
@@ -572,6 +705,7 @@ mod test {
         let (c_soft, c_float) = add(a, b);
         assert_eq!(c_soft, c_float, "0x{:08x}, 0x{:08x}", c_soft, c_float);
     }
+    */
 }
 
 const BIAS_F32: i32 = 127;
