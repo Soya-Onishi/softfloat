@@ -75,21 +75,6 @@ impl Float {
             exp: b.exp,
             sig: b.sig | 0x0040_0000,
         };
-        let return_large_magnitude = || -> Float {
-            let a_mag = a.sig | (a.exp << 23);
-            let b_mag = b.sig | (b.exp << 23);
-            if a_mag > b_mag {
-                a_sig_qnan
-            } else if a_mag < b_mag {
-                b_sig_qnan
-            } else {
-                if a.sign {
-                    b_sig_qnan
-                } else {
-                    a_sig_qnan
-                }
-            }
-        };
 
         let nan = if a.is_nan() { a_sig_qnan } else { b_sig_qnan };
 
