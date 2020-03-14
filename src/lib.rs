@@ -174,13 +174,13 @@ impl Float {
             );
         }
 
-        if fa.exp == 0xFF || fb.exp == 0xFF {
-            let result = if (fa.exp == 0xFF && fa.sig != 0) || (fb.exp == 0xFF && fb.sig != 0) {
+        if self.exp == 0xFF || other.exp == 0xFF {
+            let result = if (self.exp == 0xFF && self.sig != 0) || (other.exp == 0xFF && other.sig != 0) {
                 Float::propagate_nan(self, other)
-            } else if fa.exp == 0xFF {
-                (fa, Exception(EXCEPTION_NONE))
+            } else if self.exp == 0xFF {
+                (self, Exception(EXCEPTION_NONE))
             } else {
-                (fb, Exception(EXCEPTION_NONE))
+                (Float::infinite(sign), Exception(EXCEPTION_NONE))
             };
 
             return result;
@@ -456,6 +456,11 @@ mod test {
     #[test]
     fn f32_add() -> std::io::Result<()> {
         f32_test_harness("f32_add", |a, b| a.add(b))
+    }
+
+    #[test]    
+    fn f32_sub() -> std::io::Result<()> {
+        f32_test_harness("f32_sub", |a, b| a.sub(b))
     }
 
     fn f32_test_harness(function: &str, f: impl Fn(Float, Float) -> (Float, Exception)) -> std::io::Result<()> {
