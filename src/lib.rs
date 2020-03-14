@@ -60,6 +60,10 @@ impl Float {
         self.exp == 0xFF && (self.sig & 0x003F_FFFF != 0) && (self.sig & 0x0040_0000 == 0)
     }
 
+    fn is_inf(&self) -> bool {
+        self.exp == 0xFF && self.sig == 0
+    }
+
     fn propagate_nan(a: Float, b: Float) -> (Float, Exception) {
         let a_sig_qnan = Float {
             sign: a.sign,
@@ -87,24 +91,7 @@ impl Float {
             }
         };
 
-        let nan = match (a.is_signal_nan(), b.is_signal_nan()) {
-            (true, true) => return_large_magnitude(),
-            (false, false) => return_large_magnitude(),
-            (true, false) => {
-                if b.is_nan() {
-                    b_sig_qnan
-                } else {
-                    a_sig_qnan
-                }
-            }
-            (false, true) => {
-                if a.is_nan() {
-                    a_sig_qnan
-                } else {
-                    b_sig_qnan
-                }
-            }
-        };
+        let nan = if a.is_nan() { a_sig_qnan } else { b_sig_qnan };
 
         let exception = if a.is_signal_nan() | b.is_signal_nan() {
             Exception(EXCEPTION_INVALID)
@@ -217,19 +204,24 @@ impl Float {
                 (0, self, other, self.sign)
             }
         };
-        let sig_a_hidden = if fa.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
-        let sig_b_hidden = if fb.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
-        let sig_a = (sig_a_hidden | fa.sig) << ROUND_WIDTH;
-        let sig_b = (sig_b_hidden | fb.sig) << ROUND_WIDTH;
+        let sig_a = if fa.exp == 0 { fa.sig << 1 } else { fa.sig | HIDDEN_SIGNIFICAND };
+        let sig_b = if fb.exp == 0 { fb.sig << 1 } else { fb.sig | HIDDEN_SIGNIFICAND };
+        let sig_a = sig_a << ROUND_WIDTH;
+        let sig_b = sig_b << ROUND_WIDTH;
         let sig_b = Float::right_shift_32(sig_b, exp_diff);
 
         // there is no need to calculate fb.exp == 0xFF
         // because fa.exp >= fb.exp must be true.
         if fa.exp == 0xFF || fb.exp == 0xFF {
-            if (fa.exp == 0xFF && fa.sig != 0) || (fb.exp == 0xFF && fb.sig != 0) {
-                return Float::propagate_nan(fa, fb);
+            if fa.is_inf() && fb.is_inf() {
+                return (Float::default_nan(), Exception(EXCEPTION_INVALID))
             }
-            return (Float::default_nan(), Exception(EXCEPTION_INVALID));
+
+            if fa.is_nan() || fb.is_nan() {
+                return Float::propagate_nan(self, other);
+            }
+
+            return (Float::infinite(sign), Exception(EXCEPTION_NONE));
         }
         let sig = sig_a - sig_b;
 
@@ -511,9 +503,8 @@ mod test {
             .unwrap()
             .split('\n')
             .into_iter()
-            .map(|line| re.captures(line))
-            .filter(|caps| caps.is_some())
-            .map(|caps| caps.unwrap())
+            .filter(|line| re.is_match(line))
+            .map(|line| re.captures(line).unwrap())            
             .map(|caps| {
                 let a = u32::from_str_radix(caps.get(1).unwrap().as_str(), 16).unwrap();
                 let b = u32::from_str_radix(caps.get(2).unwrap().as_str(), 16).unwrap();
