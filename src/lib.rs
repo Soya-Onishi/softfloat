@@ -448,6 +448,11 @@ mod test {
         f32_test_harness("f32_sub", |a, b| a.sub(b))
     }
 
+    #[test]
+    fn f32_mul() -> std::io::Result<()> {
+        f32_test_harness("f32_mul", |a, b| a.mul(b))
+    }
+
     fn f32_test_harness(function: &str, f: impl Fn(Float, Float) -> (Float, Exception)) -> std::io::Result<()> {
         let output = Command::new("testfloat_gen")
             .arg("-precision32")
