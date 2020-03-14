@@ -442,57 +442,26 @@ impl Into<f32> for Float {
 
 #[cfg(test)]
 mod test {
-    extern crate rand;
     extern crate regex;
-
-    use crate::{f32u32, Float};
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    
+    use crate::Float;
+    use crate::Exception;
     use regex::Regex;
     use std::process::Command;
     use std::str::from_utf8;
 
     #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct float32_t {
-        v: u32,
-    }
-
-    impl Into<f32> for float32_t {
-        fn into(self) -> f32 {
-            let uni = f32u32 { u: self.v };
-            unsafe { uni.f }
-        }
-    }
-
-    impl From<f32> for float32_t {
-        fn from(f: f32) -> float32_t {
-            let uni = f32u32 { f };
-            float32_t {
-                v: unsafe { uni.u },
-            }
-        }
-    }
-
-    impl From<u32> for float32_t {
-        fn from(u: u32) -> float32_t {
-            float32_t { v: u }
-        }
-    }
-
-    /*
-    #[link(name = "softfloat")]
-    extern "C" {
-        fn f32_mul(a: float32_t, b: float32_t) -> float32_t;
-        fn f32_add(a: float32_t, b: float32_t) -> float32_t;
-    }
-    */
+    union f32u32{ f: f32, u: u32 }
 
     #[test]
-    #[ignore]
-    fn f32_add_test() -> std::io::Result<()> {
+    fn f32_add() -> std::io::Result<()> {
+        f32_test_harness("f32_add", |a, b| a.add(b))
+    }
+
+    fn f32_test_harness(function: &str, f: impl Fn(Float, Float) -> (Float, Exception)) -> std::io::Result<()> {
         let output = Command::new("testfloat_gen")
             .arg("-precision32")
-            .arg("f32_add")
+            .arg(function)
             .output()?;
         assert_eq!(output.status.code(), Some(0));
         assert!(output.stderr.is_empty());
@@ -513,18 +482,22 @@ mod test {
 
                 (a, b, c, exceptions)
             })
-            .map(|(a, b, c, exceptions)| {
-                let af = Float::new(a);
-                let bf = Float::new(b);
-                let (res, exp) = af.add(bf);
+            .map(|(a, b, c, expect_exception)| {
+                let fa = Float::new(a);
+                let fb = Float::new(b);                
+                let expect = (c, expect_exception);
+                let (actual_result, actual_exception) = f(fa, fb);
+                let actual_result = unsafe { 
+                    let u = f32u32 { f: actual_result.into() };
+                    u.u
+                };
 
-                let uni = f32u32 { f: res.into() };
-                let res = unsafe { uni.u };
-
-                (a, b, (c, res), (exceptions, exp.0))
+                let actual = (actual_result, actual_exception.0);
+                
+                (a, b, expect, actual)
             })
-            .filter(|(_, _, (c, res), (exceptions, exp))| c != res || exceptions != exp)
-            .collect::<Vec<(u32, u32, (u32, u32), (u8, u8))>>();
+            .filter(|(_, _, (e_result, e_exception), (a_result, a_exception))| e_result != a_result || e_exception != a_exception)
+            .collect::<Vec<(u32, u32, (u32, u8), (u32, u8))>>();
 
         if result.is_empty() {
             Ok(())
@@ -535,168 +508,15 @@ mod test {
             );
             result
                 .iter()
-                .for_each(|(a, b, (c_expect, c_actual), (e_expect, e_actual))| {
+                .for_each(|(a, b, (e_result, e_exception), (a_result, a_exception))| {
                     println!(
                         "0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}, {:02x}, {:02x}",
-                        a, b, c_expect, c_actual, e_expect, e_actual
+                        a, b, e_result, a_result, e_exception, a_exception
                     )
                 });
-            panic!("test_f32_add failed({} failed)", result.len());
+            panic!("test_{} failed({} failed)", function, result.len());
         }
     }
-
-    #[test]
-    fn add_0xfffffffe_0xffffffff() {
-        let a = Float::new(0xffff_fffe);
-        let b = Float::new(0xffff_ffff);
-
-        a.add(b);
-    }
-
-    #[test]
-    fn add_0xff800001_0xffffffff() {
-        let a = Float::new(0xff80_0001);
-        let b = Float::new(0xffff_ffff);
-
-        a.add(b);
-    }
-
-    /*
-    #[test]
-    fn mult_with_softfloat() {
-        let mut rng: StdRng = SeedableRng::seed_from_u64(0);
-        let mut is_failure = false;
-
-        for _ in 0..10000000 {
-            let a: u32 = rng.gen();
-            let b: u32 = rng.gen();
-
-            let (c_soft, c_float) = mult(a, b);
-
-            if c_soft != c_float {
-                if !is_failure {
-                    println!(
-                        "{:>10}, {:>10}, {:>10}, {:>10}",
-                        "a", "b", "expect", "actual"
-                    );
-                }
-
-                is_failure = true;
-
-                println!(
-                    "0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}",
-                    a, b, c_soft, c_float
-                );
-            }
-        }
-        assert!(!is_failure, "test is failure");
-    }
-
-    #[test]
-    fn mult_0x90ba4d56_0xaf16e52d() {
-        mult_once(0x90ba4d56, 0xaf16e52d)
-    }
-    #[test]
-    fn mult_0xf942bc00_0x993de000() {
-        mult_once(0xf942bc00, 0x993de000);
-    }
-
-    #[test]
-    fn mult_0x6ecab647_0x8c400000() {
-        mult_once(0x6eca_b647, 0x8c40_0000)
-    }
-
-    #[test]
-    fn mult_0x03698281_0x7c15b40f() {
-        mult_once(0x03698281, 0x7c15b40f)
-    }
-
-    #[test]
-    fn add_with_softfloat() {
-        let mut rng: StdRng = SeedableRng::seed_from_u64(0);
-        let mut is_failure = false;
-
-        for _ in 0..10000000 {
-            let a: u32 = rng.gen();
-            let b: u32 = rng.gen();
-
-            let (c_soft, c_float) = add(a, b);
-
-            if c_soft != c_float {
-                if !is_failure {
-                    println!(
-                        "{:>10}, {:>10}, {:>10}, {:>10}",
-                        "a", "b", "expect", "actual"
-                    );
-                }
-
-                is_failure = true;
-
-                println!(
-                    "0x{:08x}, 0x{:08x}, 0x{:08x}, 0x{:08x}",
-                    a & 0x7FFF_FFFF,
-                    b & 0x7FFF_FFFF,
-                    c_soft,
-                    c_float
-                );
-            }
-        }
-        assert!(!is_failure, "test is failure");
-    }
-
-    #[test]
-    fn add_0x000c90f2_0x01997658() {
-        add_once(0x000c90f2, 0x01997658);
-    }
-
-    #[test]
-    fn add_0x0024a100_0x007c7c6f() {
-        add_once(0x0024a100, 0x007c7c6f);
-    }
-
-    fn mult(a: u32, b: u32) -> (u32, u32) {
-        let a_float = Float::new(a);
-        let b_float = Float::new(b);
-        let a_soft = float32_t::from(a);
-        let b_soft = float32_t::from(b);
-
-        let c_float = a_float.mul(b_float);
-        let c_soft = unsafe { f32_mul(a_soft, b_soft) };
-
-        let c_soft: u32 = unsafe { (f32u32 { f: c_soft.into() }).u };
-        let c_float: u32 = unsafe { (f32u32 { f: c_float.into() }).u };
-
-        (c_soft, c_float)
-    }
-
-    fn mult_once(a: u32, b: u32) {
-        let (c_soft, c_float) = mult(a, b);
-        assert_eq!(c_soft, c_float, "0x{:08x}, 0x{:08x}", c_soft, c_float);
-    }
-
-    fn add(a: u32, b: u32) -> (u32, u32) {
-        let a = a & 0x7FFF_FFFF;
-        let b = b & 0x7FFF_FFFF;
-
-        let a_float = Float::new(a);
-        let b_float = Float::new(b);
-        let a_soft = float32_t::from(a);
-        let b_soft = float32_t::from(b);
-
-        let c_float = a_float.add(b_float);
-        let c_soft = unsafe { f32_add(a_soft, b_soft) };
-
-        let c_soft: u32 = unsafe { (f32u32 { f: c_soft.into() }).u };
-        let c_float: u32 = unsafe { (f32u32 { f: c_float.into() }).u };
-
-        (c_soft, c_float)
-    }
-
-    fn add_once(a: u32, b: u32) {
-        let (c_soft, c_float) = add(a, b);
-        assert_eq!(c_soft, c_float, "0x{:08x}, 0x{:08x}", c_soft, c_float);
-    }
-    */
 }
 
 const BIAS_F32: i32 = 127;
