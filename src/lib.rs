@@ -64,6 +64,10 @@ impl Float {
         self.exp == 0xFF && self.sig == 0
     }
 
+    fn is_zero(&self) -> bool {
+        (self.exp | self.sig) == 0
+    }
+
     fn propagate_nan(a: Float, b: Float) -> (Float, Exception) {
         let a_sig_qnan = Float {
             sign: a.sign,
@@ -216,7 +220,7 @@ impl Float {
                 Exception(EXCEPTION_NONE),
             );
         }
-        let (exp, sig) = Float::normalize_subnormal_f32(sig);
+        let (exp, sig) = Float::normalize_subnormal_f32(sig, 5);
         let exp = fa.exp as i32 + exp;
 
         Float::pack_float32(sign, exp, sig, mode)
@@ -225,15 +229,26 @@ impl Float {
     pub fn mul_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
         // TODO: implement subnormal pattern
 
-        let try_mul_inf_or_nan = |sign: bool, f: Float, g: Float| -> Option<(Float, Exception)> {
+        let try_mul_inf_or_nan = |sign: bool, f: Float, g: Float| -> Option<(Float, Exception)> {        
+            if f.is_inf() && !g.is_nan() { 
+                if g.is_zero() { Some((Float::default_nan(), Exception(EXCEPTION_INVALID))) }
+                else { Some((Float::infinite(sign), Exception(EXCEPTION_NONE)))}
+            } else if f.is_nan() || g.is_nan() {
+                Some(Float::propagate_nan(f, g))
+            } else {
+                None
+            }
+
+            /*
             match ((f.exp, f.sig), (g.exp, g.sig)) {
-                ((0xFF, 0), (0x00, 0)) => {
+                ((0xFF, 0), _) if !g.is_nan() => {
                     Some((Float::default_nan(), Exception(EXCEPTION_INVALID)))
                 }
                 ((0xFF, 0), _) => Some((Float::infinite(sign), Exception(EXCEPTION_NONE))),
                 ((0xFF, _), _) => Some(Float::propagate_nan(f, g)),
                 _ => None,
             }
+            */
         };
 
         let make_exp_sig = |sign: bool, f: Float| -> Either<(Float, Exception), (i32, u32)> {
@@ -242,7 +257,12 @@ impl Float {
             } else if f.sig == 0 {
                 Either::Left((Float::zero(sign), Exception(EXCEPTION_NONE)))
             } else {
-                Either::Right(Float::normalize_subnormal_f32(f.sig))
+                // 1.0 * (2 ^ -127) cannot be represented as normal 
+                // because 2 ^ -127  means exp == 0 and when exp is 0, there is no hidden bit(ケチ表現).
+                // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) and 
+                // -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
+                let shamt = f.sig.leading_zeros() - 8;
+                Either::Right((-(shamt as i32) + 1, f.sig << shamt))
             }
         };
 
@@ -269,12 +289,31 @@ impl Float {
             Either::Right(pair) => pair,
         };
 
-        let exp = exp_a + exp_b - BIAS_F32;
-        let sig = {
+    
+        let (exp, sig) = {
             let mul_result = sig_a as u64 * sig_b as u64;
+
+            /*
+              Why SIG_WIDTH_F32 - ROUND_WITH ? not (SIG_WIDTH_F32 + 1) - ROUND_WITH ?
+              
+                  1.1
+              *   1.1
+              -------
+                  1 1
+                1 1
+             --------
+              1 0 0 1 ==> 10.01
+
+              That's why exp need to be added by 1 in pack_float32.
+              So, shifted must be 28 bit width.
+            */
+                    
+            
+            let exp = exp_a + exp_b - BIAS_F32; 
             let shifted =
-                Float::right_shift_64(mul_result, (SIG_WIDTH_F32 - ROUND_WIDTH) as u64) as u32;
-            shifted
+                Float::right_shift_64(mul_result, (SIG_WIDTH_F32 - ROUND_WIDTH) as u64) as u32;            
+            
+            (exp, shifted)
         };
 
         Float::pack_float32(sign, exp, sig, mode)
@@ -302,13 +341,15 @@ impl Float {
             }
         };
 
-        let (exp, sig) = if exp <= 0 {
+        let (exp, sig, is_underflow) = if exp <= 0 {
+            let is_tiny = (sig + round_inc < 0x0800_0000) || exp < 0;
             let shamt = -exp as u32 + 1;
             let sig = Float::right_shift_32(sig, shamt);
+            let round_bits = sig & ROUND_MASK != 0;
 
-            (0, sig)
+            (0, sig, is_tiny && round_bits)
         } else {
-            (exp as u32, sig)
+            (exp as u32, sig, false)
         };
 
         let (exp, sig) = match Float::normalize(sign, exp, sig, round_inc) {
@@ -325,7 +366,7 @@ impl Float {
         };
 
         let exception = if round_bits != 0 {
-            let underflow = if exp == 0 {
+            let underflow = if is_underflow {
                 Exception(EXCEPTION_UNDERFLOW)
             } else {
                 Exception(EXCEPTION_NONE)
@@ -368,7 +409,8 @@ impl Float {
             (exp, sig) if sig >= 0x0800_0000 => {
                 Float::normalize(sign, exp + 1, Float::right_shift_32(sig, 1), round_inc)
             }
-            (0x00, sig) if sig >= 0x0400_0000 => Float::normalize(sign, exp + 1, sig, round_inc),
+            // if exp == 0 && sig >= 0x0400_0000 means 10.0 * 2^-127 => 1.0 * 2^-126
+            (0x00, sig) if sig >= 0x0400_0000 => Float::normalize(sign, 1, sig, round_inc),
             (exp, sig) => either::Right((exp, sig)),
         }
     }
@@ -389,12 +431,8 @@ impl Float {
         }
     }
 
-    fn normalize_subnormal_f32(sig: u32) -> (i32, u32) {
-        let shamt = sig.leading_zeros() - 5;
-
-        // When floating point is 1.xx, exp must be 1 or more.
-        // This means if sig.leading_zeros() - 8 == 0, exp must be 1.
-        // That is why, left side of tuple must be 1 - shamt, not -shamt.
+    fn normalize_subnormal_f32(sig: u32, bias: u32) -> (i32, u32) {
+        let shamt = sig.leading_zeros() - bias;
         (-(shamt as i32), sig << shamt)
     }
 }
@@ -511,6 +549,38 @@ mod test {
                 });
             panic!("test_{} failed({} failed)", function, result.len());
         }
+    }
+
+    #[test]    
+    fn f32_mul_0xc07fffee_0x4fff0010() {
+        let a = Float::new(0xc07f_ffee);
+        let b = Float::new(0x4fff_0010);
+
+        a.mul(b);
+    }
+
+    #[test]    
+    fn f32_mul_0xc1f4718a_0x80000102() {
+        let a = Float::new(0xc1f4_718a);
+        let b = Float::new(0x8000_0102);
+
+        a.mul(b);
+    }
+
+    #[test]    
+    fn f32_mul_0xbf7fffff_0x80800000() {
+        let a = Float::new(0xbf7f_ffff);
+        let b = Float::new(0x8080_0000);
+
+        a.mul(b);
+    }
+
+    #[test]
+    fn f32_mul_0x0032c625_0x80e00004() {
+        let a = Float::new(0x0032_c625);
+        let b = Float::new(0x80e0_0004);
+
+        a.mul(b);
     }
 }
 
