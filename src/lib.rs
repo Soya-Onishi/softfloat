@@ -238,17 +238,6 @@ impl Float {
             } else {
                 None
             }
-
-            /*
-            match ((f.exp, f.sig), (g.exp, g.sig)) {
-                ((0xFF, 0), _) if !g.is_nan() => {
-                    Some((Float::default_nan(), Exception(EXCEPTION_INVALID)))
-                }
-                ((0xFF, 0), _) => Some((Float::infinite(sign), Exception(EXCEPTION_NONE))),
-                ((0xFF, _), _) => Some(Float::propagate_nan(f, g)),
-                _ => None,
-            }
-            */
         };
 
         let make_exp_sig = |sign: bool, f: Float| -> Either<(Float, Exception), (i32, u32)> {
