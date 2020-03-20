@@ -111,6 +111,10 @@ impl Float {
         self.mul_with_mode(other, RoundingMode::NearEven)
     }
 
+    pub fn div(self, other: Float) -> (Float, Exception) {
+        self.div_with_mode(other, RoundingMode::NearEven)
+    }
+
     pub fn add_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
         if self.sign ^ other.sign {
             self.sub_impl(other, mode)
@@ -125,6 +129,10 @@ impl Float {
         } else {
             self.sub_impl(other, mode)
         }
+    }
+
+    pub fn div_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
+        self.div_impl(other, mode)
     }
 
     fn add_impl(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
@@ -248,8 +256,8 @@ impl Float {
             } else {
                 // 1.0 * (2 ^ -127) cannot be represented as normal 
                 // because 2 ^ -127  means exp == 0 and when exp is 0, there is no hidden bit(ケチ表現).
-                // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) and 
-                // -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
+                // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) instead of 1.0 * (2 ^ -128).
+                // Also, -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
                 let shamt = f.sig.leading_zeros() - 8;
                 Either::Right((-(shamt as i32) + 1, f.sig << shamt))
             }
@@ -306,6 +314,56 @@ impl Float {
         };
 
         Float::pack_float32(sign, exp, sig, mode)
+    }
+
+    fn div_impl(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
+        let sign = self.sign ^ other.sign;
+
+        if self.is_nan() || other.is_nan() { return Float::propagate_nan(self, other); }
+        if self.is_inf() { 
+            if other.is_inf() { return (Float::default_nan(), Exception(EXCEPTION_INVALID)); }
+            else { return (Float::infinite(sign), Exception(EXCEPTION_NONE)); }
+        }        
+        if other.is_inf() { return (Float::zero(sign), Exception(EXCEPTION_NONE)); }
+        if other.is_zero() { 
+            if self.is_zero() { return (Float::default_nan(), Exception(EXCEPTION_INVALID)); }
+            else { return (Float::infinite(sign), Exception(EXCEPTION_INFINITE)); }
+        }
+
+        // This is copy of make_exp_sig in mul_impl
+        let make_exp_sig = |sign: bool, f: Float| -> Either<(Float, Exception), (i32, u32)> {
+            if f.exp != 0 {
+                Either::Right((f.exp as i32, f.sig | HIDDEN_SIGNIFICAND))
+            } else if f.sig == 0 {
+                Either::Left((Float::zero(sign), Exception(EXCEPTION_NONE)))
+            } else {
+                // 1.0 * (2 ^ -127) cannot be represented as normal 
+                // because 2 ^ -127  means exp == 0 and when exp is 0, there is no hidden bit(ケチ表現).
+                // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) instead of 1.0 * (2 ^ -128).
+                // Also, -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
+                let shamt = f.sig.leading_zeros() - 8;
+                Either::Right((-(shamt as i32) + 1, f.sig << shamt))
+            }
+        };
+
+        let (exp_a, sig_a) = match make_exp_sig(sign, self) {
+            Either::Left(pair) => return pair,
+            Either::Right(pair) => pair,
+        };
+
+        let (exp_b, sig_b) = match make_exp_sig(sign, other) {
+            Either::Left(pair) => return pair,
+            Either::Right(pair) => pair,
+        };
+
+        let dividend = (sig_a as u64) << (23_u64 + ROUND_WIDTH as u64);
+        let divisor = sig_b as u64;
+        let sig = (dividend / divisor) as u32;
+        let rem = ((dividend % divisor) != 0) as u32;
+        let (mod_exp, sig) = Float::normalize_subnormal_f32(sig, 5);
+        let exp = exp_a - exp_b + mod_exp + BIAS_F32;
+
+        Float::pack_float32(sign, exp, sig | rem, mode)
     }
 
     fn pack_float32(sign: bool, exp: i32, sig: u32, mode: RoundingMode) -> (Float, Exception) {
@@ -480,6 +538,11 @@ mod test {
         f32_test_harness("f32_mul", |a, b| a.mul(b))
     }
 
+    #[test]
+    fn f32_div() -> std::io::Result<()> {
+        f32_test_harness("f32_div", |a, b| a.div(b))
+    }
+
     fn f32_test_harness(function: &str, f: impl Fn(Float, Float) -> (Float, Exception)) -> std::io::Result<()> {
         let output = Command::new("testfloat_gen")
             .arg("-precision32")
@@ -570,6 +633,22 @@ mod test {
         let b = Float::new(0x80e0_0004);
 
         a.mul(b);
+    }
+
+    #[test]
+    fn f32_div_0xc00007ef_0x3dfff7bf() {
+        let a = Float::new(0xc000_07ef);
+        let b = Float::new(0x3dff_f7bf);
+
+        a.div(b);
+    }
+
+    #[test]
+    fn f32_div_0xdea0000e_0x41ff8003() {
+        let a = Float::new(0xdea0_000e);
+        let b = Float::new(0x41ff_8003);
+
+        a.div(b);
     }
 }
 
