@@ -1,9 +1,18 @@
 mod exception;
+mod ops;
+mod constant;
+mod constructor;
+mod getter;
+mod format;
 
 extern crate either;
 use either::Either;
 
-use exception::*;
+use exception::Exception;
+use constant::FloatConstant;
+use constructor::FloatConstructor;
+use getter::FloatGetter;
+use format::FloatFormat;
 
 #[repr(C)]
 union f32u32 {
@@ -11,12 +20,13 @@ union f32u32 {
     u: u32,
 }
 
-#[derive(Clone, Copy)]
-pub struct Float {
+/* #[derive(Clone, Copy)]
+pub struct Float<T> where T: Clone + Copy {
     sign: bool,
     exp: u32,
     sig: u32,
-}
+} */
+
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum RoundingMode {
@@ -27,343 +37,26 @@ pub enum RoundingMode {
     Min,
 }
 
-impl Float {
-    pub fn default_nan() -> Float {
-        Float {
-            sign: true,
-            exp: 0xFF,
-            sig: 0x0040_0000,
-        }
-    }
+struct Float<T> { v: T }
 
-    pub fn zero(sign: bool) -> Float {
-        Float {
-            sign,
-            exp: 0x00,
-            sig: 0x00,
-        }
-    }
-
-    pub fn infinite(sign: bool) -> Float {
-        Float {
-            sign,
-            exp: 0xFF,
-            sig: 0x00,
-        }
-    }
-
-    fn is_nan(&self) -> bool {
-        self.exp == 0xFF && self.sig != 0
-    }
-
-    fn is_signal_nan(&self) -> bool {
-        self.exp == 0xFF && (self.sig & 0x003F_FFFF != 0) && (self.sig & 0x0040_0000 == 0)
-    }
-
-    fn is_inf(&self) -> bool {
-        self.exp == 0xFF && self.sig == 0
-    }
-
-    fn is_zero(&self) -> bool {
-        (self.exp | self.sig) == 0
-    }
-
-    fn propagate_nan(a: Float, b: Float) -> (Float, Exception) {
-        let a_sig_qnan = Float {
-            sign: a.sign,
-            exp: a.exp,
-            sig: a.sig | 0x0040_0000,
+impl<T> Float<T> where T: FloatConstant<T> + FloatConstructor<T> + FloatGetter<T> + FloatFormat {
+    fn propagate_nan(a: Float<T>, b: Float<T>) -> (Float<T>, Exception) {
+        let make_qnan = |f: Float<T>| {
+            Float::<T>::constructor(f.sign(), f.exp(), f.sig() | Float::<T>::signal_bit());
         };
-        let b_sig_qnan = Float {
-            sign: b.sign,
-            exp: b.exp,
-            sig: b.sig | 0x0040_0000,
-        };
+
+        let a_sig_qnan = make_qnan(a);
+        let b_sig_qnan = make_qnan(b);    
 
         let nan = if a.is_nan() { a_sig_qnan } else { b_sig_qnan };
 
         let exception = if a.is_signal_nan() | b.is_signal_nan() {
-            Exception(EXCEPTION_INVALID)
+            Exception::invalid()
         } else {
-            Exception(EXCEPTION_NONE)
+            Exception::none()
         };
 
         (nan, exception)
-    }
-
-    pub fn new(value: u32) -> Float {
-        let sign = (value & 0x8000_0000) != 0;
-        let exp = (value & 0x7FFF_FFFF) >> 23;
-        let sig = value & 0x007F_FFFF;
-
-        Float { sign, exp, sig }
-    }
-
-    pub fn add(self, other: Float) -> (Float, Exception) {
-        self.add_with_mode(other, RoundingMode::NearEven)
-    }
-
-    pub fn sub(self, other: Float) -> (Float, Exception) {
-        self.sub_with_mode(other, RoundingMode::NearEven)
-    }
-
-    pub fn mul(self, other: Float) -> (Float, Exception) {
-        self.mul_with_mode(other, RoundingMode::NearEven)
-    }
-
-    pub fn div(self, other: Float) -> (Float, Exception) {
-        self.div_with_mode(other, RoundingMode::NearEven)
-    }
-
-    pub fn add_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
-        if self.sign ^ other.sign {
-            self.sub_impl(other, mode)
-        } else {
-            self.add_impl(other, mode)
-        }
-    }
-
-    pub fn sub_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
-        if self.sign ^ other.sign {
-            self.add_impl(other, mode)
-        } else {
-            self.sub_impl(other, mode)
-        }
-    }
-
-    pub fn div_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
-        self.div_impl(other, mode)
-    }
-
-    fn add_impl(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
-        let (exp_diff, fa, fb) = if self.exp < other.exp {
-            (other.exp - self.exp, other, self)
-        } else {
-            (self.exp - other.exp, self, other)
-        };
-        let sign = self.sign;
-
-        let sig_a_hidden = if fa.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
-        let sig_b_hidden = if fb.exp == 0 { 0 } else { HIDDEN_SIGNIFICAND };
-        let sig_a = if fa.exp == 0 {
-            fa.sig << (ROUND_WIDTH + 1)
-        } else {
-            (sig_a_hidden | fa.sig) << ROUND_WIDTH
-        };
-        let sig_b = if fb.exp == 0 {
-            fb.sig << (ROUND_WIDTH + 1)
-        } else {
-            (sig_b_hidden | fb.sig) << ROUND_WIDTH
-        };
-
-        if fa.exp == 0 && fb.exp == 0 {
-            let fc_sig = fa.sig + fb.sig;
-            let exp = fc_sig >> 23;
-            let sig = fc_sig & 0x007F_FFFF;
-
-            return (
-                Float {
-                    sign: self.sign,
-                    exp,
-                    sig,
-                },
-                Exception(EXCEPTION_NONE),
-            );
-        }
-
-        if self.exp == 0xFF || other.exp == 0xFF {
-            let result = if (self.exp == 0xFF && self.sig != 0) || (other.exp == 0xFF && other.sig != 0) {
-                Float::propagate_nan(self, other)
-            } else if self.exp == 0xFF {
-                (self, Exception(EXCEPTION_NONE))
-            } else {
-                (Float::infinite(sign), Exception(EXCEPTION_NONE))
-            };
-
-            return result;
-        }
-        let exp = fa.exp;
-        let sig_b = Float::right_shift_32(sig_b, exp_diff);
-        let sig = sig_a + sig_b;
-
-        Float::pack_float32(sign, exp as i32, sig, mode)
-    }
-
-    fn sub_impl(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
-        let (exp_diff, fa, fb, sign): (_, _, _, bool) = if self.exp < other.exp {
-            (other.exp - self.exp, other, self, !self.sign)
-        } else if self.exp > other.exp {
-            (self.exp - other.exp, self, other, self.sign)
-        } else {
-            if self.sig < other.sig {
-                (0, other, self, !self.sign)
-            } else {
-                (0, self, other, self.sign)
-            }
-        };
-        let sig_a = if fa.exp == 0 { fa.sig << 1 } else { fa.sig | HIDDEN_SIGNIFICAND };
-        let sig_b = if fb.exp == 0 { fb.sig << 1 } else { fb.sig | HIDDEN_SIGNIFICAND };
-        let sig_a = sig_a << ROUND_WIDTH;
-        let sig_b = sig_b << ROUND_WIDTH;
-        let sig_b = Float::right_shift_32(sig_b, exp_diff);
-
-        // there is no need to calculate fb.exp == 0xFF
-        // because fa.exp >= fb.exp must be true.
-        if fa.exp == 0xFF || fb.exp == 0xFF {
-            if fa.is_inf() && fb.is_inf() {
-                return (Float::default_nan(), Exception(EXCEPTION_INVALID))
-            }
-
-            if fa.is_nan() || fb.is_nan() {
-                return Float::propagate_nan(self, other);
-            }
-
-            return (Float::infinite(sign), Exception(EXCEPTION_NONE));
-        }
-        let sig = sig_a - sig_b;
-
-        if sig == 0 {
-            return (
-                Float::zero(mode == RoundingMode::Min),
-                Exception(EXCEPTION_NONE),
-            );
-        }
-        let (exp, sig) = Float::normalize_subnormal_f32(sig, 5);
-        let exp = fa.exp as i32 + exp;
-
-        Float::pack_float32(sign, exp, sig, mode)
-    }
-
-    pub fn mul_with_mode(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
-        // TODO: implement subnormal pattern
-
-        let try_mul_inf_or_nan = |sign: bool, f: Float, g: Float| -> Option<(Float, Exception)> {        
-            if f.is_inf() && !g.is_nan() { 
-                if g.is_zero() { Some((Float::default_nan(), Exception(EXCEPTION_INVALID))) }
-                else { Some((Float::infinite(sign), Exception(EXCEPTION_NONE)))}
-            } else if f.is_nan() || g.is_nan() {
-                Some(Float::propagate_nan(f, g))
-            } else {
-                None
-            }
-        };
-
-        let make_exp_sig = |sign: bool, f: Float| -> Either<(Float, Exception), (i32, u32)> {
-            if f.exp != 0 {
-                Either::Right((f.exp as i32, f.sig | HIDDEN_SIGNIFICAND))
-            } else if f.sig == 0 {
-                Either::Left((Float::zero(sign), Exception(EXCEPTION_NONE)))
-            } else {
-                // 1.0 * (2 ^ -127) cannot be represented as normal 
-                // because 2 ^ -127  means exp == 0 and when exp is 0, there is no hidden bit(ケチ表現).
-                // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) instead of 1.0 * (2 ^ -128).
-                // Also, -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
-                let shamt = f.sig.leading_zeros() - 8;
-                Either::Right((-(shamt as i32) + 1, f.sig << shamt))
-            }
-        };
-
-        let sign = self.sign ^ other.sign;
-
-        match try_mul_inf_or_nan(sign, self, other) {
-            Some(f) => return f,
-            None => {}
-        }
-
-        match try_mul_inf_or_nan(sign, other, self) {
-            Some(f) => return f,
-            None => {}
-        }
-
-        // zero multiplication derive zero
-        let (exp_a, sig_a) = match make_exp_sig(sign, self) {
-            Either::Left(zero) => return zero,
-            Either::Right(pair) => pair,
-        };
-
-        let (exp_b, sig_b) = match make_exp_sig(sign, other) {
-            Either::Left(zero) => return zero,
-            Either::Right(pair) => pair,
-        };
-
-    
-        let (exp, sig) = {
-            let mul_result = sig_a as u64 * sig_b as u64;
-
-            /*
-              Why SIG_WIDTH_F32 - ROUND_WITH ? not (SIG_WIDTH_F32 + 1) - ROUND_WITH ?
-              
-                  1.1
-              *   1.1
-              -------
-                  1 1
-                1 1
-             --------
-              1 0 0 1 ==> 10.01
-
-              That's why exp need to be added by 1 in pack_float32.
-              So, shifted must be 28 bit width.
-            */
-                    
-            
-            let exp = exp_a + exp_b - BIAS_F32; 
-            let shifted =
-                Float::right_shift_64(mul_result, (SIG_WIDTH_F32 - ROUND_WIDTH) as u64) as u32;            
-            
-            (exp, shifted)
-        };
-
-        Float::pack_float32(sign, exp, sig, mode)
-    }
-
-    fn div_impl(self, other: Float, mode: RoundingMode) -> (Float, Exception) {
-        let sign = self.sign ^ other.sign;
-
-        if self.is_nan() || other.is_nan() { return Float::propagate_nan(self, other); }
-        if self.is_inf() { 
-            if other.is_inf() { return (Float::default_nan(), Exception(EXCEPTION_INVALID)); }
-            else { return (Float::infinite(sign), Exception(EXCEPTION_NONE)); }
-        }        
-        if other.is_inf() { return (Float::zero(sign), Exception(EXCEPTION_NONE)); }
-        if other.is_zero() { 
-            if self.is_zero() { return (Float::default_nan(), Exception(EXCEPTION_INVALID)); }
-            else { return (Float::infinite(sign), Exception(EXCEPTION_INFINITE)); }
-        }
-
-        // This is copy of make_exp_sig in mul_impl
-        let make_exp_sig = |sign: bool, f: Float| -> Either<(Float, Exception), (i32, u32)> {
-            if f.exp != 0 {
-                Either::Right((f.exp as i32, f.sig | HIDDEN_SIGNIFICAND))
-            } else if f.sig == 0 {
-                Either::Left((Float::zero(sign), Exception(EXCEPTION_NONE)))
-            } else {
-                // 1.0 * (2 ^ -127) cannot be represented as normal 
-                // because 2 ^ -127  means exp == 0 and when exp is 0, there is no hidden bit(ケチ表現).
-                // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) instead of 1.0 * (2 ^ -128).
-                // Also, -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
-                let shamt = f.sig.leading_zeros() - 8;
-                Either::Right((-(shamt as i32) + 1, f.sig << shamt))
-            }
-        };
-
-        let (exp_a, sig_a) = match make_exp_sig(sign, self) {
-            Either::Left(pair) => return pair,
-            Either::Right(pair) => pair,
-        };
-
-        let (exp_b, sig_b) = match make_exp_sig(sign, other) {
-            Either::Left(pair) => return pair,
-            Either::Right(pair) => pair,
-        };
-
-        let dividend = (sig_a as u64) << (23_u64 + ROUND_WIDTH as u64);
-        let divisor = sig_b as u64;
-        let sig = (dividend / divisor) as u32;
-        let rem = ((dividend % divisor) != 0) as u32;
-        let (mod_exp, sig) = Float::normalize_subnormal_f32(sig, 5);
-        let exp = exp_a - exp_b + mod_exp + BIAS_F32;
-
-        Float::pack_float32(sign, exp, sig | rem, mode)
     }
 
     fn pack_float32(sign: bool, exp: i32, sig: u32, mode: RoundingMode) -> (Float, Exception) {
@@ -414,13 +107,13 @@ impl Float {
 
         let exception = if round_bits != 0 {
             let underflow = if is_underflow {
-                Exception(EXCEPTION_UNDERFLOW)
+                Exception::underflow()
             } else {
-                Exception(EXCEPTION_NONE)
+                Exception::none()
             };
-            underflow | Exception(EXCEPTION_INEXACT)
+            underflow | Exception::inexact()
         } else {
-            Exception(EXCEPTION_NONE)
+            Exception::none()
         };
 
         let sig =
@@ -451,7 +144,7 @@ impl Float {
                     }
                 };
 
-                either::Left((infinite, Exception(EXCEPTION_OVERFLOW | EXCEPTION_INEXACT)))
+                either::Left((infinite, Exception::overflow() | Exception::inexact()))
             }
             (exp, sig) if sig >= 0x0800_0000 => {
                 Float::normalize(sign, exp + 1, Float::right_shift_32(sig, 1), round_inc)
@@ -514,8 +207,7 @@ impl Into<f32> for Float {
 mod test {
     extern crate regex;
     
-    use crate::Float;
-    use crate::Exception;
+    use crate::{Float, Exception, RoundingMode};
     use regex::Regex;
     use std::process::Command;
     use std::str::from_utf8;
@@ -525,22 +217,22 @@ mod test {
 
     #[test]
     fn f32_add() -> std::io::Result<()> {
-        f32_test_harness("f32_add", |a, b| a.add(b))
+        f32_test_harness("f32_add", |a, b| a.add_with_mode(b, RoundingMode::NearEven))
     }
 
     #[test]    
     fn f32_sub() -> std::io::Result<()> {
-        f32_test_harness("f32_sub", |a, b| a.sub(b))
+        f32_test_harness("f32_sub", |a, b| a.sub_with_mode(b, RoundingMode::NearEven))
     }
 
     #[test]
     fn f32_mul() -> std::io::Result<()> {
-        f32_test_harness("f32_mul", |a, b| a.mul(b))
+        f32_test_harness("f32_mul", |a, b| a.mul_with_mode(b, RoundingMode::NearEven))
     }
 
     #[test]
     fn f32_div() -> std::io::Result<()> {
-        f32_test_harness("f32_div", |a, b| a.div(b))
+        f32_test_harness("f32_div", |a, b| a.div_with_mode(b, RoundingMode::NearEven))
     }
 
     fn f32_test_harness(function: &str, f: impl Fn(Float, Float) -> (Float, Exception)) -> std::io::Result<()> {
@@ -608,7 +300,7 @@ mod test {
         let a = Float::new(0xc07f_ffee);
         let b = Float::new(0x4fff_0010);
 
-        a.mul(b);
+        a * b;
     }
 
     #[test]    
@@ -616,7 +308,7 @@ mod test {
         let a = Float::new(0xc1f4_718a);
         let b = Float::new(0x8000_0102);
 
-        a.mul(b);
+        a * b;
     }
 
     #[test]    
@@ -624,7 +316,7 @@ mod test {
         let a = Float::new(0xbf7f_ffff);
         let b = Float::new(0x8080_0000);
 
-        a.mul(b);
+        a * b;
     }
 
     #[test]
@@ -632,7 +324,7 @@ mod test {
         let a = Float::new(0x0032_c625);
         let b = Float::new(0x80e0_0004);
 
-        a.mul(b);
+        a * b;
     }
 
     #[test]
@@ -640,7 +332,7 @@ mod test {
         let a = Float::new(0xc000_07ef);
         let b = Float::new(0x3dff_f7bf);
 
-        a.div(b);
+        a / b;
     }
 
     #[test]
@@ -648,7 +340,7 @@ mod test {
         let a = Float::new(0xdea0_000e);
         let b = Float::new(0x41ff_8003);
 
-        a.div(b);
+        a / b;
     }
 }
 
