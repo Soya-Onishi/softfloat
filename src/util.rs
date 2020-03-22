@@ -99,7 +99,7 @@ pub(crate) fn round_mask<T>() -> T
 pub(crate) fn right_shift<T>(sig: T, shamt: T) -> T 
   where T: From<u8> + From<bool> + PartialEq + PartialOrd + Sub<Output=T> + Shr<Output=T> + Shl<Output=T> + BitAnd<Output=T> + BitOr<Output=T> + BitWidth + Clone + Copy
 {
-  if shamt > T::width() {
+  if shamt >= T::width() {
     T::from(sig != T::from(0))
   } else {
     let shifted = sig >> shamt;
