@@ -114,7 +114,7 @@ pub(crate) fn exp_max<T>() -> T
         T: Sub<Output=T> + Shl<Output=T> + From<u8>
 {
   let width = Float::<T>::exp_width();
-  T::from(1) << width - T::from(1)
+  (T::from(1) << width) - T::from(1)
 }
 
 pub(crate) fn sig_max<T>() -> T 
@@ -122,7 +122,7 @@ pub(crate) fn sig_max<T>() -> T
         T: Sub<Output=T> + Shl<Output=T> + From<u8> + From<bool>
 {
   let width = Float::<T>::sig_width();
-  T::from(1) << width - T::from(1)
+  (T::from(1) << width) - T::from(1)
 }
 
 fn is_max_exp<T>(f: Float<T>) -> bool
@@ -151,7 +151,5 @@ fn is_signal_sig<T>(f: Float<T>) -> bool
   T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq + BitAnd<Output=T>
 { 
   let mask = T::from(1) << (Float::<T>::sig_width() - T::from(1));
-  let is_signal_flag = (f.sig() & mask) != T::from(0);
-
-  is_signal_flag
+  (f.sig() & mask) == T::from(0)
 }
