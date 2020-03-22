@@ -40,7 +40,7 @@ impl<T> FloatFormat<T> for Float<T>
         T: From<u8> + From<bool> + Add<Output=T> + Sub<Output=T> + Shr<Output=T> + Shl<Output=T> + BitAnd<Output=T> + BitOr<Output=T> + PartialEq + Clone + Copy
 {
   fn sig(self) -> T {
-    let mask = T::from(1) << Float::<T>::sig_width() - T::from(1);
+    let mask = (T::from(1) << Float::<T>::sig_width()) - T::from(1);
     self.v & mask
   }
   
@@ -77,9 +77,9 @@ impl<T> FloatFormat<T> for Float<T>
   
   fn new(sign: bool, exp: T, sig: T) -> Float<T> {    
     let sign = T::from(sign) << (Float::<T>::sig_width() + Float::<T>::exp_width());
-    let exp_mask = T::from(1) << Float::<T>::exp_width() - T::from(1);
+    let exp_mask = (T::from(1) << Float::<T>::exp_width()) - T::from(1);
     let exp = (exp & exp_mask) << Float::<T>::sig_width();
-    let sig_mask = T::from(1) << Float::<T>::sig_width() - T::from(1);
+    let sig_mask = (T::from(1) << Float::<T>::sig_width()) - T::from(1);
     let sig = sig & sig_mask;
 
     Float::<T> { v: sign | exp | sig }
