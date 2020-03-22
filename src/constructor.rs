@@ -1,5 +1,6 @@
 use crate::Float;
 
+/*
 pub trait FloatConstructor<T> {
   fn constructor(sign: bool, exp: T, sig: T) -> Float<T>;  
   fn default_nan() -> Float<T>;      
@@ -25,3 +26,4 @@ impl FloatConstructor<u32> for Float<u32> {
   }
 }
 
+*/

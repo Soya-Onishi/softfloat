@@ -1,5 +1,6 @@
 use crate::Float;
 
+/*
 pub trait FloatFormat {
   fn is_nan(self) -> bool; 
   fn is_signal_nan(self) -> bool;
@@ -29,3 +30,4 @@ impl FloatFormat for Float<u32> {
       self.exp() == 0 && self.sig() != 0
   }
 }
+*/
