@@ -1,5 +1,5 @@
 
-use std::ops::{Add, Sub, Div, Rem, BitAnd, BitOr, Not, Shl, Shr, Neg};
+use std::ops::{Add, Sub, BitAnd, BitOr, Not, Shl, Shr, Neg};
 use std::cmp::{PartialEq, PartialOrd};
 use std::convert::TryFrom;
 use crate::{

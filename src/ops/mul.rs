@@ -1,6 +1,6 @@
 extern crate either;
 
-use std::ops::{Add, Sub, Mul, Div, Rem, BitAnd, BitOr, Not, Shl, Shr, Neg};
+use std::ops::{Add, Sub, Mul, BitAnd, BitOr, Not, Shl, Shr, Neg};
 use std::cmp::{PartialEq, PartialOrd};
 use std::convert::TryFrom;
 use either::Either;

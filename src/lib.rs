@@ -1,10 +1,7 @@
 mod exception;
 mod ops;
-mod constant;
-mod constructor;
-mod getter;
-mod format;
 mod util;
+mod constant;
 
 use exception::Exception;
 use std::cmp::PartialEq;
