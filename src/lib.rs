@@ -85,6 +85,7 @@ mod test {
     extern crate regex;
     
     use crate::{Float, Exception, RoundingMode};
+    use crate::constant::*;    
     use regex::Regex;
     use std::process::Command;
     use std::str::from_utf8;
@@ -112,7 +113,7 @@ mod test {
         f32_test_harness("f32_div", |a, b| a.div_with_mode(b, RoundingMode::NearEven))
     }
 
-    fn f32_test_harness(function: &str, f: impl Fn(Float<u32>, Float<u32>) -> (Float, Exception)) -> std::io::Result<()> {
+    fn f32_test_harness(function: &str, f: impl Fn(Float<u32>, Float<u32>) -> (Float<u32>, Exception)) -> std::io::Result<()> {
         let output = Command::new("testfloat_gen")
             .arg("-precision32")
             .arg(function)
@@ -137,8 +138,8 @@ mod test {
                 (a, b, c, exceptions)
             })
             .map(|(a, b, c, expect_exception)| {
-                let fa = Float::new(a);
-                let fb = Float::new(b);                
+                let fa = Float::<u32>::construct(a);
+                let fb = Float::<u32>::construct(b); 
                 let expect = (c, expect_exception);
                 let (actual_result, actual_exception) = f(fa, fb);
                 let actual_result = unsafe { 
@@ -173,49 +174,57 @@ mod test {
     }
 
     #[test]    
+    fn f32_add_0xfffffffe_0xfffffffe() {
+        let a = Float::construct(0xffff_fffe);
+        let b = Float::construct(0xffff_fffe);
+
+        a + b;
+    }
+
+    #[test]    
     fn f32_mul_0xc07fffee_0x4fff0010() {
-        let a = Float::new(0xc07f_ffee);
-        let b = Float::new(0x4fff_0010);
+        let a = Float::construct(0xc07f_ffee);
+        let b = Float::construct(0x4fff_0010);
 
         a * b;
     }
 
     #[test]    
     fn f32_mul_0xc1f4718a_0x80000102() {
-        let a = Float::new(0xc1f4_718a);
-        let b = Float::new(0x8000_0102);
+        let a = Float::construct(0xc1f4_718a);
+        let b = Float::construct(0x8000_0102);
 
         a * b;
     }
 
     #[test]    
     fn f32_mul_0xbf7fffff_0x80800000() {
-        let a = Float::new(0xbf7f_ffff);
-        let b = Float::new(0x8080_0000);
+        let a = Float::construct(0xbf7f_ffff);
+        let b = Float::construct(0x8080_0000);
 
         a * b;
     }
 
     #[test]
     fn f32_mul_0x0032c625_0x80e00004() {
-        let a = Float::new(0x0032_c625);
-        let b = Float::new(0x80e0_0004);
+        let a = Float::construct(0x0032_c625);
+        let b = Float::construct(0x80e0_0004);
 
         a * b;
     }
 
     #[test]
     fn f32_div_0xc00007ef_0x3dfff7bf() {
-        let a = Float::new(0xc000_07ef);
-        let b = Float::new(0x3dff_f7bf);
+        let a = Float::construct(0xc000_07ef);
+        let b = Float::construct(0x3dff_f7bf);
 
         a / b;
     }
 
     #[test]
     fn f32_div_0xdea0000e_0x41ff8003() {
-        let a = Float::new(0xdea0_000e);
-        let b = Float::new(0x41ff_8003);
+        let a = Float::construct(0xdea0_000e);
+        let b = Float::construct(0x41ff_8003);
 
         a / b;
     }
