@@ -194,6 +194,11 @@ pub(crate) trait Extends {
   fn extend(v: Self) -> Self::Output;
 }
 
+impl Extends for u16 {
+  type Output = u32;
+  fn extend(v: u16) -> u32 { v as u32 }
+}
+
 impl Extends for u32 {
   type Output = u64;
 
@@ -210,6 +215,10 @@ pub(crate) trait LeadingZeros {
   fn count_leading_zeros(self) -> Self;
 }
 
+impl LeadingZeros for u16 {
+  fn count_leading_zeros(self) -> u16 { u16::try_from(self.leading_zeros()).unwrap() }
+}
+
 impl LeadingZeros for u32 {
   fn count_leading_zeros(self) -> u32 { self.leading_zeros() }
 }
@@ -220,6 +229,10 @@ impl LeadingZeros for u64 {
 
 pub(crate) trait BitWidth {
   fn width() -> Self;
+}
+
+impl BitWidth for u16 {
+  fn width() -> u16 { 16 }
 }
 
 impl BitWidth for u32 {

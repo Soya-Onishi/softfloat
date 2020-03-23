@@ -84,6 +84,32 @@ impl Float<u64> {
       }
 }
 
+impl Float<u16> {
+    pub fn add_with_mode(self, other: Float<u16>, mode: RoundingMode) -> (Float<u16>, Exception) {
+        if self.sign() ^ other.sign() {
+            sub_impl::<u16, i16>(self, other, mode)
+        } else {
+            add_impl::<u16, i16>(self, other, mode)
+        }
+    }
+
+    pub fn sub_with_mode(self, other: Float<u16>, mode: RoundingMode) -> (Float<u16>, Exception) {
+        if self.sign() ^ other.sign() {
+          add_impl::<u16, i16>(self, other, mode)
+        } else {
+          sub_impl::<u16, i16>(self, other, mode)
+        }
+      }
+    
+      pub fn mul_with_mode(self, other: Float<u16>, mode: RoundingMode) -> (Float<u16>, Exception) {
+        mul_impl::<u16, i16, u32>(self, other, mode)
+      }
+    
+      pub fn div_with_mode(self, other: Float<u16>, mode: RoundingMode) -> (Float<u16>, Exception) {
+        div_impl::<u16, i16, u32>(self, other, mode)
+      }
+}
+
 impl From<f32> for Float<u32> {
     fn from(f: f32) -> Float<u32> {
         let u = unsafe { (f32u32 { f }).u };
@@ -179,6 +205,26 @@ mod test {
     #[test]
     fn f64_div() -> std::io::Result<()> {
         f64_test_harness("f64_div", |a, b| a.div_with_mode(b, RoundingMode::NearEven))
+    }
+
+    #[test]
+    fn f16_add() -> std::io::Result<()> {
+        f16_test_harness("f16_add", |a, b| a.add_with_mode(b, RoundingMode::NearEven))
+    }
+
+    #[test]    
+    fn f16_sub() -> std::io::Result<()> {
+        f16_test_harness("f16_sub", |a, b| a.sub_with_mode(b, RoundingMode::NearEven))
+    }
+
+    #[test]
+    fn f16_mul() -> std::io::Result<()> {
+        f16_test_harness("f16_mul", |a, b| a.mul_with_mode(b, RoundingMode::NearEven))
+    }
+
+    #[test]
+    fn f16_div() -> std::io::Result<()> {
+        f16_test_harness("f16_div", |a, b| a.div_with_mode(b, RoundingMode::NearEven))
     }
 
     fn f32_test_harness(function: &str, f: impl Fn(Float<u32>, Float<u32>) -> (Float<u32>, Exception)) -> std::io::Result<()> {
@@ -294,6 +340,60 @@ mod test {
                 .for_each(|(a, b, (e_result, e_exception), (a_result, a_exception))| {
                     println!(
                         "0x{:016x}, 0x{:016x}, 0x{:016x}, 0x{:016x}, {:02x}, {:02x}",
+                        a, b, e_result, a_result, e_exception, a_exception
+                    )
+                });
+            panic!("test_{} failed({} failed)", function, result.len());
+        }
+    }
+
+    fn f16_test_harness(function: &str, f: impl Fn(Float<u16>, Float<u16>) -> (Float<u16>, Exception)) -> std::io::Result<()> {
+        let output = Command::new("testfloat_gen")            
+            .arg(function)
+            .output()?;
+        assert_eq!(output.status.code(), Some(0), "status code is not 0(actual is {:?}). you need to install testfloat", output.status.code());
+        assert!(output.stderr.is_empty());
+        let re = Regex::new(r"([0-9A-Fa-f]{4}) ([0-9A-Fa-f]{4}) ([0-9A-Fa-f]{4}) ([0-9A-Fa-f]{2})")
+            .unwrap();
+
+        let result = from_utf8(output.stdout.as_ref())
+            .unwrap()
+            .split('\n')
+            .into_iter()
+            .filter(|line| re.is_match(line))
+            .map(|line| re.captures(line).unwrap())            
+            .map(|caps| {
+                let a = u16::from_str_radix(caps.get(1).unwrap().as_str(), 16).unwrap();
+                let b = u16::from_str_radix(caps.get(2).unwrap().as_str(), 16).unwrap();
+                let c = u16::from_str_radix(caps.get(3).unwrap().as_str(), 16).unwrap();
+                let exceptions = u8::from_str_radix(caps.get(4).unwrap().as_str(), 16).unwrap();
+
+                (a, b, c, exceptions)
+            })
+            .map(|(a, b, c, expect_exception)| {
+                let fa = Float::<u16>::construct(a);
+                let fb = Float::<u16>::construct(b); 
+                let expect = (c, expect_exception);
+                let (actual_result, actual_exception) = f(fa, fb);
+                let actual = (actual_result.v, actual_exception.0);
+                
+                (a, b, expect, actual)
+            })
+            .filter(|(_, _, (e_result, e_exception), (a_result, a_exception))| e_result != a_result || e_exception != a_exception)
+            .collect::<Vec<(u16, u16, (u16, u8), (u16, u8))>>();
+
+        if result.is_empty() {
+            Ok(())
+        } else {
+            println!(
+                "{:>6}, {:>6}, {:>6}, {:>6}, {:>16}, {:>16}",
+                "a", "b", "c_expect", "c_actual", "exception_expect", "exception_actual"
+            );
+            result
+                .iter()
+                .for_each(|(a, b, (e_result, e_exception), (a_result, a_exception))| {
+                    println!(
+                        "0x{:04x}, 0x{:04x}, 0x{:04x}, 0x{:04x}, {:02x}, {:02x}",
                         a, b, e_result, a_result, e_exception, a_exception
                     )
                 });

@@ -21,6 +21,12 @@ impl FloatConstant<u64> for Float<u64> {
   fn bias() -> u64 { 1023 }  
 }
 
+impl FloatConstant<u16> for Float<u16> {
+  fn sig_width() -> u16 { 10 }
+  fn exp_width() -> u16 { 5 }
+  fn bias() -> u16 { 15 }
+}
+
 pub trait FloatFormat<T> {
   fn sig(self) -> T;  
   fn exp(self) -> T;
