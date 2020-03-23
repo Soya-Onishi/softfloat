@@ -35,17 +35,17 @@ pub struct Float<T> { v: T }
 impl Float<u32> {
   pub fn add_with_mode(self, other: Float<u32>, mode: RoundingMode) -> (Float<u32>, Exception) {
     if self.sign() ^ other.sign() {
-        sub_impl::<u32, i32, _, _>(self, other, mode)
+        sub_impl::<u32, i32>(self, other, mode)
       } else {
-        add_impl::<u32, i32, _, _>(self, other, mode)
+        add_impl::<u32, i32>(self, other, mode)
       }
   }
 
   pub fn sub_with_mode(self, other: Float<u32>, mode: RoundingMode) -> (Float<u32>, Exception) {
     if self.sign() ^ other.sign() {
-      add_impl::<u32, i32, _, _>(self, other, mode)
+      add_impl::<u32, i32>(self, other, mode)
     } else {
-      sub_impl::<u32, i32, _, _>(self, other, mode)
+      sub_impl::<u32, i32>(self, other, mode)
     }
   }
 
@@ -54,24 +54,24 @@ impl Float<u32> {
   }
 
   pub fn div_with_mode(self, other: Float<u32>, mode: RoundingMode) -> (Float<u32>, Exception) {
-    div_impl::<u32, i32, u64, _, _, _>(self, other, mode)
+    div_impl::<u32, i32, u64>(self, other, mode)
   }
 }
 
 impl Float<u64> {
     pub fn add_with_mode(self, other: Float<u64>, mode: RoundingMode) -> (Float<u64>, Exception) {
         if self.sign() ^ other.sign() {
-            sub_impl::<u64, i64, _, _>(self, other, mode)
+            sub_impl::<u64, i64>(self, other, mode)
         } else {
-            add_impl::<u64, i64, _, _>(self, other, mode)
+            add_impl::<u64, i64>(self, other, mode)
         }
     }
 
     pub fn sub_with_mode(self, other: Float<u64>, mode: RoundingMode) -> (Float<u64>, Exception) {
         if self.sign() ^ other.sign() {
-          add_impl::<u64, i64, _, _>(self, other, mode)
+          add_impl::<u64, i64>(self, other, mode)
         } else {
-          sub_impl::<u64, i64, _, _>(self, other, mode)
+          sub_impl::<u64, i64>(self, other, mode)
         }
       }
     
@@ -80,7 +80,7 @@ impl Float<u64> {
       }
     
       pub fn div_with_mode(self, other: Float<u64>, mode: RoundingMode) -> (Float<u64>, Exception) {
-        div_impl::<u64, i64, u128, _, _, _>(self, other, mode)
+        div_impl::<u64, i64, u128>(self, other, mode)
       }
 }
 

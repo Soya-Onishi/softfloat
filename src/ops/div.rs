@@ -20,14 +20,14 @@ impl Div for Float<u32> {
   }
 }
 
-pub(crate) fn div_impl<A, B, C, D, E, F>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception) 
+pub(crate) fn div_impl<A, B, C>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception) 
 where Float<A>: FloatConstant<A> + FloatFormat<A>,
-A : Extends<Output=C> + TryFrom<B, Error=D> + TryFrom<C, Error=F> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + TryFrom<C> + LeadingZeros + BitWidth + Clone + Copy,
-B : TryFrom<A, Error=E> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
+A : Extends<Output=C> + TryFrom<B> + TryFrom<C> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + TryFrom<C> + LeadingZeros + BitWidth + Clone + Copy,
+B : TryFrom<A> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
 C : Shl<Output=C> + Div<Output=C> + Rem<Output=C> + From<u8> + PartialEq + Clone + Copy,
-D : std::fmt::Debug,
-E : std::fmt::Debug,
-F : std::fmt::Debug,
+<A as TryFrom<B>>::Error: std::fmt::Debug,
+<A as TryFrom<C>>::Error: std::fmt::Debug,
+B::Error: std::fmt::Debug,
 {
   let sign = fx.sign() ^ fy.sign();
 
@@ -57,13 +57,13 @@ F : std::fmt::Debug,
   pack(sign, exp, sig, mode)
 }
 
-fn ext_div<A, B, C, D, E>(sig_a: A, exp_a: B, sig_b: A, exp_b: B) -> (B, A) 
+fn ext_div<A, B, C>(sig_a: A, exp_a: B, sig_b: A, exp_b: B) -> (B, A) 
     where Float<A>: FloatConstant<A>,
-          A : Extends<Output=C> + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + BitOr<Output=A> + From<u8> + From<bool> + TryFrom<C, Error=D> + LeadingZeros + BitWidth + Clone + Copy,
-          B : TryFrom<A, Error=E> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + Clone + Copy,
+          A : Extends<Output=C> + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + BitOr<Output=A> + From<u8> + From<bool> + TryFrom<C> + LeadingZeros + BitWidth + Clone + Copy,
+          B : TryFrom<A> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + Clone + Copy,
           C : Shl<Output=C> + Div<Output=C> + Rem<Output=C> + From<u8> + PartialEq + Clone + Copy,
-          D : std::fmt::Debug,
-          E : std::fmt::Debug,
+          A::Error : std::fmt::Debug,
+          B::Error : std::fmt::Debug,
 {
     let shamt = Float::<A>::sig_width() + round_width::<A>();
     let dividend = A::extend(sig_a) << A::extend(shamt);

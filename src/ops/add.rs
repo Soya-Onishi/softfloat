@@ -18,12 +18,12 @@ impl Add for Float<u32> {
   }
 }
 
-pub(crate) fn add_impl<A, B, C, D>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception) 
+pub(crate) fn add_impl<A, B>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception) 
 where Float<A>: FloatConstant<A> + FloatFormat<A>,
-      A : TryFrom<B, Error=C> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + LeadingZeros + BitWidth + Clone + Copy,
-      B : TryFrom<A, Error=D> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
-      C : std::fmt::Debug,
-      D : std::fmt::Debug,
+      A : TryFrom<B> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + LeadingZeros + BitWidth + Clone + Copy,
+      B : TryFrom<A> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
+      A::Error : std::fmt::Debug,
+      B::Error : std::fmt::Debug,
 {
   let (exp_diff, fa, fb) = if fx.exp() < fy.exp() {
       (fy.exp() - fx.exp(), fy, fx)

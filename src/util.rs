@@ -29,11 +29,11 @@ pub(crate) fn propagate_nan<T>(a: Float<T>, b: Float<T>) -> (Float<T>, Exception
   (nan, exception)
 } 
 
-pub(crate) fn pack<A, B, C>(sign: bool, exp: B, sig: A, mode: RoundingMode) -> (Float<A>, Exception) 
+pub(crate) fn pack<A, B>(sign: bool, exp: B, sig: A, mode: RoundingMode) -> (Float<A>, Exception) 
   where Float<A>: FloatConstant<A> + FloatFormat<A>,
-        A: From<u8> + From<bool> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + TryFrom<B, Error=C> + BitWidth + Clone + Copy,
+        A: From<u8> + From<bool> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + TryFrom<B> + BitWidth + Clone + Copy,
         B: From<u8> + PartialOrd + Neg<Output=B> + Clone + Copy,
-        C: std::fmt::Debug
+        A::Error: std::fmt::Debug
 {
   let is_near_even = mode == RoundingMode::NearEven;
   let round_value = make_round_value(sign, mode);
@@ -156,10 +156,10 @@ pub(crate) fn normalize<T>(sign: bool, exp: T, sig: T, round_inc: T) -> Either<(
   }
 }
 
-pub(crate) fn normalize_subnormal<A, B, C>(sig: A, bias: A) -> (B, A) 
+pub(crate) fn normalize_subnormal<A, B>(sig: A, bias: A) -> (B, A) 
   where A: LeadingZeros + Sub<Output=A> + Shl<Output=A> + Clone + Copy,
-        B: TryFrom<A, Error=C> + Neg<Output=B> + Clone + Copy,
-        C: std::fmt::Debug
+        B: TryFrom<A> + Neg<Output=B> + Clone + Copy,
+        B::Error: std::fmt::Debug,
         
 {
   let shamt = sig.count_leading_zeros() - bias;
