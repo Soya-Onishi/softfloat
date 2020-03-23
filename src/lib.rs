@@ -182,6 +182,38 @@ mod test {
     }
 
     #[test]    
+    fn f32_add_0xc00007ef_0x3dfff7bf() {
+        let a = Float::construct(0xc00007ef);
+        let b = Float::construct(0x3dfff7bf);
+
+        a + b;
+    }
+
+    #[test]    
+    fn f32_add_0xc07fffee_0x4fff0010() {
+        let a = Float::construct(0xc07fffee);
+        let b = Float::construct(0x4fff0010);
+
+        a + b;
+    }
+
+    #[test]    
+    fn f32_add_0x0027fffe_0x808006fe() {
+        let a = Float::construct(0x0027fffe);
+        let b = Float::construct(0x808006fe);
+
+        a + b;
+    }
+
+    #[test]    
+    fn f32_mul_0x3f55e76b_0x80800000() {
+        let a = Float::construct(0x3f55_e76b);
+        let b = Float::construct(0x8080_0000);
+
+        a * b;
+    }
+
+    #[test]    
     fn f32_mul_0xc07fffee_0x4fff0010() {
         let a = Float::construct(0xc07f_ffee);
         let b = Float::construct(0x4fff_0010);
