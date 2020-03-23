@@ -20,14 +20,14 @@ impl Mul for Float<u32> {
   }
 }
 
-pub(crate) fn mul_impl<A, B, C, D, E, F>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception)
+pub(crate) fn mul_impl<A, B, C>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception)
     where Float<A>: FloatConstant<A> + FloatFormat<A>,          
-          A : Extends<Output=C> + TryFrom<B, Error=D> + TryFrom<C, Error=E> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Mul<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + LeadingZeros + BitWidth + Clone + Copy,
-          B : TryFrom<A, Error=F> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
+          A : Extends<Output=C> + TryFrom<B> + TryFrom<C> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Mul<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + LeadingZeros + BitWidth + Clone + Copy,
+          B : TryFrom<A> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
           C: From<u8> + From<bool> + PartialEq + PartialOrd + Sub<Output=C> + Mul<Output=C> + Shr<Output=C> + Shl<Output=C> + BitAnd<Output=C> + BitOr<Output=C> + BitWidth + Clone + Copy,
-          D : std::fmt::Debug,
-          E : std::fmt::Debug,
-          F : std::fmt::Debug,
+          <A as TryFrom<B>>::Error: std::fmt::Debug,
+          <A as TryFrom<C>>::Error: std::fmt::Debug,
+          B::Error: std::fmt::Debug,
 {   
     let try_mul_inf_or_nan = |sign: bool, f: Float<A>, g: Float<A>| -> Option<(Float<A>, Exception)> {        
         if f.is_inf() && !g.is_nan() { 
@@ -37,21 +37,6 @@ pub(crate) fn mul_impl<A, B, C, D, E, F>(fx: Float<A>, fy: Float<A>, mode: Round
             Some(propagate_nan(f, g))
         } else {
             None
-        }
-    };
-
-    let make_exp_sig = |sign: bool, f: Float<A>| -> Either<(Float<A>, Exception), (B, A)> {
-        if f.exp() != A::from(0) {
-            Either::Right((B::try_from(f.exp()).unwrap(), f.sig() | Float::<A>::hidden_bit()))
-        } else if f.sig() == A::from(0) {
-            Either::Left((Float::zero(sign), Exception::none()))
-        } else {
-            // 1.0 * (2 ^ -127) cannot be represented as normal 
-            // because 2 ^ -127  means exp == 0 and when exp is 0, there is no hidden bit(ケチ表現).
-            // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) instead of 1.0 * (2 ^ -128).
-            // Also, -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
-            let shamt = f.sig().count_leading_zeros() - A::from(8);
-            Either::Right((-B::try_from(shamt).unwrap() + B::from(1), f.sig() << shamt))
         }
     };
 
@@ -68,7 +53,7 @@ pub(crate) fn mul_impl<A, B, C, D, E, F>(fx: Float<A>, fy: Float<A>, mode: Round
     }
 
     // zero multiplication derive zero
-    let (exp_a, sig_a) = match make_exp_sig(sign, fx) {
+    let (exp_a, sig_a) = match make_exp_sig::<A, B>(sign, fx) {
         Either::Left(zero) => return zero,
         Either::Right(pair) => pair,
     };

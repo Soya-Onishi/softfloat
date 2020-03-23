@@ -7,14 +7,18 @@ pub trait FloatConstant<T> {
   fn sig_width() -> T;
   fn exp_width() -> T;  
   fn bias() -> T;
-  fn width() -> T;
 }
 
 impl FloatConstant<u32> for Float<u32> {
   fn sig_width() -> u32 { 23 }
   fn exp_width() -> u32 { 8 }
-  fn bias() -> u32 { 127 }
-  fn width() -> u32 { 32 }
+  fn bias() -> u32 { 127 }  
+}
+
+impl FloatConstant<u64> for Float<u64> {
+  fn sig_width() -> u64 { 52 }
+  fn exp_width() -> u64 { 11 }
+  fn bias() -> u64 { 1023 }  
 }
 
 pub trait FloatFormat<T> {

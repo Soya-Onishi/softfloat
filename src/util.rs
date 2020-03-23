@@ -166,6 +166,29 @@ pub(crate) fn normalize_subnormal<A, B, C>(sig: A, bias: A) -> (B, A)
   (-(B::try_from(shamt).unwrap()), sig << shamt)
 }
 
+// TODO: 
+  //   This is copy of make_exp_sig in mul_impl
+  //   Make refactoring.
+pub(crate) fn make_exp_sig<A, B>(sign: bool, f: Float<A>) -> Either<(Float<A>, Exception), (B, A)> 
+  where Float<A>: FloatConstant<A> + FloatFormat<A>,
+        A: From<u8> + PartialEq + Add<Output=A> + Sub<Output=A> + Shl<Output=A> +  BitOr<Output=A> + LeadingZeros + BitWidth + Clone + Copy,
+        B: From<u8> + Neg<Output=B> + TryFrom<A> + Add<Output=B> + Clone + Copy,
+        B::Error: std::fmt::Debug,
+{
+    if f.exp() != A::from(0) {
+        Either::Right((B::try_from(f.exp()).unwrap(), f.sig() | Float::<A>::hidden_bit()))
+    } else if f.sig() == A::from(0) {
+        Either::Left((Float::<A>::zero(sign), Exception::none()))
+    } else {
+        // 1.0 * (2 ^ -127) cannot be represented as normal 
+        // because 2 ^ -127  means exp == 0 and when exp is 0, there is no hidden bit(ケチ表現).
+        // That's why we need to treat 0x0040_0000 as 1.0 * (2 ^ -127) instead of 1.0 * (2 ^ -128).
+        // Also, -(shamt as i32) + 1 is corrent and -(shamt as i32) is invalid.
+        let shamt = f.sig().count_leading_zeros() - (A::width() - (Float::<A>::sig_width() + A::from(1)));          
+        Either::Right((-B::try_from(shamt).unwrap() + B::from(1), f.sig() << shamt))
+    }
+}
+
 pub(crate) trait Extends {
   type Output;
   fn extend(v: Self) -> Self::Output;
@@ -205,4 +228,8 @@ impl BitWidth for u32 {
 
 impl BitWidth for u64 {
   fn width() -> u64 { 64 }
+}
+
+impl BitWidth for u128 {
+  fn width() -> u128 { 128 }
 }
