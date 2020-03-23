@@ -125,28 +125,28 @@ pub(crate) fn sig_max<T>() -> T
   (T::from(1) << width) - T::from(1)
 }
 
-fn is_max_exp<T>(f: Float<T>) -> bool
+pub(crate) fn is_max_exp<T>(f: Float<T>) -> bool
   where Float<T>: FloatFormat<T> + FloatConstant<T>,
         T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq
 {
   f.exp() == exp_max::<T>()
 }
 
-fn is_zero_exp<T>(f: Float<T>) -> bool
+pub(crate) fn is_zero_exp<T>(f: Float<T>) -> bool
 where Float<T>: FloatFormat<T>,
 T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq
 {
   f.exp() == T::from(0)
 }
 
-fn is_zero_sig<T>(f: Float<T>) -> bool
+pub(crate) fn is_zero_sig<T>(f: Float<T>) -> bool
 where Float<T>: FloatFormat<T>,
 T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq
 {
   f.sig() == T::from(0)
 }
 
-fn is_signal_sig<T>(f: Float<T>) -> bool
+pub(crate) fn is_signal_sig<T>(f: Float<T>) -> bool
   where Float<T>: FloatFormat<T> + FloatConstant<T>,
   T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq + BitAnd<Output=T>
 { 

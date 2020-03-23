@@ -39,12 +39,12 @@ pub(crate) fn pack<A, B, C>(sign: bool, exp: B, sig: A, mode: RoundingMode) -> (
   let round_value = make_round_value(sign, mode);
 
   let (exp, sig, is_underflow) = if exp <= B::from(0) {
-    let is_sufficient_size = (sig + round_value) >= (A::from(1) << Float::<A>::sig_width());
+    let is_sufficient_size = (sig + round_value) >= (A::from(1) << (Float::<A>::sig_width() + round_width() + A::from(1)));
     let is_neg_exp = exp < B::from(0);
     let is_tiny = !is_sufficient_size || is_neg_exp;
     let shamt = A::try_from(-exp).unwrap() + A::from(1);
     let sig = right_shift(sig, shamt);
-    let round_bits = sig & round_mask::<A>() != A::from(0);
+    let round_bits = (sig & round_mask()) != A::from(0);
 
     (A::from(0), sig, is_tiny && round_bits)
   } else {
@@ -56,7 +56,7 @@ pub(crate) fn pack<A, B, C>(sign: bool, exp: B, sig: A, mode: RoundingMode) -> (
     either::Right(pair) => pair,
   };
 
-  let round_bits = sig & round_mask::<A>();
+  let round_bits = sig & round_mask();
   let sig = sig + round_value;
 
   let (exp, sig) = match normalize(sign, exp, sig, round_value) {
@@ -103,9 +103,9 @@ pub(crate) fn right_shift<T>(sig: T, shamt: T) -> T
     T::from(sig != T::from(0))
   } else {
     let shifted = sig >> shamt;
-    let sticky = sig & T::from(((T::from(1) << shamt) - T::from(1)) != T::from(0));
+    let sticky = (sig & ((T::from(1) << shamt) - T::from(1))) != T::from(0);
 
-    shifted | sticky
+    shifted | T::from(sticky)
   }
 }
 
@@ -147,11 +147,11 @@ pub(crate) fn normalize<T>(sign: bool, exp: T, sig: T, round_inc: T) -> Either<(
 
       either::Left((infinite, Exception::overflow() | Exception::inexact()))
   }
-  (exp, sig) if sig >= (T::from(1) << Float::<T>::sig_width()) => {
+  (exp, sig) if sig >= (T::from(1) << (Float::<T>::sig_width() + round_width() + T::from(1))) => {
       normalize(sign, exp + T::from(1), right_shift(sig, T::from(1)), round_inc)
   }
   // if exp == 0 && sig >= 0x0400_0000 means 10.0 * 2^-127 => 1.0 * 2^-126
-  (exp, sig) if exp == T::from(0) && sig >= (T::from(1) << (Float::<T>::sig_width() - T::from(1))) => normalize(sign, T::from(1), sig, round_inc),
+  (exp, sig) if exp == T::from(0) && sig >= (T::from(1) << (Float::<T>::sig_width() + round_width())) => normalize(sign, T::from(1), sig, round_inc),
   (exp, sig) => either::Right((exp, sig)),
   }
 }

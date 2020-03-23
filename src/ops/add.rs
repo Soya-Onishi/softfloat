@@ -47,7 +47,7 @@ where Float<A>: FloatConstant<A> + FloatFormat<A>,
 
   if fa.exp() == A::from(0) && fb.exp() == A::from(0) {
     let fc_sig = fa.sig() + fb.sig();
-    let exp = fc_sig >> A::from(23);
+    let exp = fc_sig >> Float::<A>::sig_width();
     let sig = fc_sig & ((A::from(1) << Float::<A>::sig_width()) - A::from(1));
 
     return (
@@ -56,17 +56,9 @@ where Float<A>: FloatConstant<A> + FloatFormat<A>,
     );
   }
 
-  if fx.exp() == A::from(0xFF) || fy.exp() == A::from(0xFF) {
-    let result = if (fx.exp() == A::from(0xFF) && fx.sig() != A::from(0)) || (fy.exp() == A::from(0xFF) && fy.sig() != A::from(0)) {
-      propagate_nan(fx, fy)
-    } else if fx.exp() == A::from(0xFF) {
-      (fx, Exception::none())
-    } else {
-      (Float::<A>::infinite(sign), Exception::none())
-    };
-
-    return result;
-  }
+  if fx.is_nan() || fy.is_nan() { return propagate_nan(fx, fy) }
+  if fx.is_inf() { return (fx, Exception::none()) }
+  if fy.is_inf() { return (Float::<A>::infinite(sign), Exception::none())}  
 
   let exp = fa.exp();
   let sig_b = right_shift(sig_b, exp_diff);

@@ -101,17 +101,16 @@ F : std::fmt::Debug,
 
   // there is no need to calculate fb.exp == 0xFF
   // because fa.exp >= fb.exp must be true.
-  if fa.exp() == A::from(0xFF) || fb.exp() == A::from(0xFF) {
-      if fa.is_inf() && fb.is_inf() {
-          return (Float::default_nan(), Exception::invalid())
-      }
-
-      if fa.is_nan() || fb.is_nan() {
-          return propagate_nan(fx, fy);
-      }
-
-      return (Float::infinite(sign), Exception::none());
+  if is_max_exp(fa) || is_max_exp(fb) {
+    if fa.is_inf() && fb.is_inf() {
+        return (Float::default_nan(), Exception::invalid())
+    }
+    if fa.is_nan() || fb.is_nan() {
+        return propagate_nan(fx, fy);
+    }
+    return (Float::infinite(sign), Exception::none());
   }
+
   let sig = sig_a - sig_b;
 
   if sig == A::from(0) {
@@ -120,7 +119,7 @@ F : std::fmt::Debug,
           Exception::none(),
       );
   }
-  let (exp, sig) = normalize_subnormal(sig, A::from(5));
+  let (exp, sig) = normalize_subnormal(sig, A::width() - (Float::<A>::sig_width() + round_width() + A::from(1)));
   let exp = B::try_from(fa.exp()).unwrap() + exp;
 
   pack(sign, exp, sig, mode)
