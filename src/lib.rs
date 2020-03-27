@@ -3,10 +3,13 @@ mod ops;
 mod util;
 mod constant;
 
+use crate::constant::*;
 use exception::Exception;
-use std::cmp::PartialEq;
-use constant::FloatFormat;
+use std::ops::{Add, Sub, Mul, Div, Rem, Shl, Shr, BitAnd, BitOr, Not, Neg};
+use std::cmp::{PartialEq, PartialOrd};
+use std::convert::TryFrom;
 use crate::ops::{add::add_impl, sub::sub_impl, mul::mul_impl, div::div_impl};
+use crate::util::{BitWidth, LeadingZeros};
 
 #[repr(C)]
 union f32u32 {
@@ -31,6 +34,20 @@ pub enum RoundingMode {
 
 #[derive(Clone, Copy)]
 pub struct Float<T> { v: T }
+
+impl<T> Float<T>
+    where T: FloatFormat,
+{
+    fn new(sign: bool, exp: T::BaseType, sig: T::BaseType) -> Float<T> {
+        let sign = T::BaseType::from(sign) << T::BaseType::try_from(T::exp_width() + T::sig_width()).unwrap();
+        let exp_mask = (T::BaseType::from(1) << T::BaseType::try_from(T::exp_width()).unwrap()) - T::BaseType::from(1);
+        let exp = (exp & exp_mask) << T::BaseType::try_from(T::exp_width()).unwrap();
+        let sig_mask = (T::BaseType::from(1) << T::BaseType::try_from(T::sig_width()).unwrap()) - T::BaseType::from(1);
+        let sig = sig & sig_mask;
+
+        Float { v: T::from(sign | exp | sig) }
+    }
+}
 
 impl Float<u32> {
   pub fn add_with_mode(self, other: Float<u32>, mode: RoundingMode) -> (Float<u32>, Exception) {
@@ -146,6 +163,94 @@ impl From<u64> for Float<u64> {
 impl Into<f64> for Float<u64> {
     fn into(self) -> f64 {
         unsafe { (f64u64 { u: self.v }).f }
+    }
+}
+
+
+trait FloatFormat: Clone + Copy {
+    type BaseType:
+    Clone +
+    Copy +
+    From<u8> +
+    From<bool> +
+    From<Self> +
+    TryFrom<usize> +
+    TryFrom<Self::ExtendedType> +
+    LeadingZeros +
+    BitWidth +
+    Add<Output=Self::BaseType> +
+    Sub<Output=Self::BaseType> +
+    Mul<Output=Self::BaseType> +
+    Div<Output=Self::BaseType> +
+    Rem<Output=Self::BaseType> +
+    Shr<Output=Self::BaseType> +
+    Shl<Output=Self::BaseType> +
+    BitAnd<Output=Self::BaseType> +
+    BitOr<Output=Self::BaseType> +
+    PartialEq +
+    PartialOrd;
+
+    type ExtendedType:
+    Clone +
+    Copy +
+    From<u8> +
+    From<bool> +
+    From<Self::BaseType> +
+    BitWidth +
+    Add<Output=Self::ExtendedType> +
+    Sub<Output=Self::ExtendedType> +
+    Mul<Output=Self::ExtendedType> +
+    Div<Output=Self::ExtendedType> +
+    Rem<Output=Self::ExtendedType> +
+    Shr<Output=Self::ExtendedType> +
+    Shl<Output=Self::ExtendedType> +
+    BitAnd<Output=Self::ExtendedType> +
+    BitOr<Output=Self::ExtendedType> +
+    PartialEq +
+    PartialOrd;
+
+    type SignedType:
+    Clone +
+    Copy +
+    From<u8> +
+    From<bool> +
+    TryFrom<Self::BaseType> +
+    Add<Output=Self::SignedType> +
+    Sub<Output=Self::SignedType> +
+    Mul<Output=Self::SignedType> +
+    Div<Output=Self::SignedType> +
+    Rem<Output=Self::SignedType> +
+    Neg<Output=Self::SignedType> +
+    Shr<Output=Self::SignedType> +
+    Shl<Output=Self::SignedType> +
+    BitAnd<Output=Self::SignedType> +
+    BitOr<Output=Self::SignedType> +
+    PartialEq +
+    PartialOrd;
+
+    fn sig_width() -> usize;
+    fn exp_width() -> usize;
+}
+
+#[derive(Clone, Copy)]
+struct Float16(u16);
+#[derive(Clone, Copy)]
+struct Float32(u32);
+#[derive(Clone, Copy)]
+struct Float64(u64);
+
+impl FloatFormat for Float16 {
+    type BaseType = u16;
+    type ExtendedType = u32;
+    type SignedType = i16;
+
+    fn sig_width() -> usize { 10 }
+    fn exp_width() -> usize { 5 }
+}
+
+impl From<Float16> for u16 {
+    fn from(v: Float16) -> u16 {
+        v.0
     }
 }
 

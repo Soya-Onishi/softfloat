@@ -1,91 +1,69 @@
-use crate::Float;
+use crate::{Float, FloatFormat};
 
-use std::ops::{Add, Sub, BitAnd, BitOr, Shl, Shr};
-use std::cmp::PartialEq;
+use std::convert::TryFrom;
 
-pub trait FloatConstant<T> {
-  fn sig_width() -> T;
-  fn exp_width() -> T;  
-  fn bias() -> T;
-}
-
-impl FloatConstant<u32> for Float<u32> {
-  fn sig_width() -> u32 { 23 }
-  fn exp_width() -> u32 { 8 }
-  fn bias() -> u32 { 127 }  
-}
-
-impl FloatConstant<u64> for Float<u64> {
-  fn sig_width() -> u64 { 52 }
-  fn exp_width() -> u64 { 11 }
-  fn bias() -> u64 { 1023 }  
-}
-
-impl FloatConstant<u16> for Float<u16> {
-  fn sig_width() -> u16 { 10 }
-  fn exp_width() -> u16 { 5 }
-  fn bias() -> u16 { 15 }
-}
-
-pub trait FloatFormat<T> {
-  fn sig(self) -> T;  
-  fn exp(self) -> T;
-  fn sign(self) -> bool;
-  fn is_nan(self) -> bool;
-  fn is_signal_nan(self) -> bool;
-  fn is_inf(self) -> bool;
-  fn is_zero(self) -> bool;
-  fn is_subnormal(self) -> bool;  
-  fn new(sign: bool, exp: T, sig: T) -> Float<T>;  
-  fn construct(v: T) -> Float<T>;
-  fn default_nan() -> Float<T>;
-  fn zero(sign: bool) -> Float<T>;
-  fn infinite(sign: bool) -> Float<T>;
-  fn hidden_bit() -> T;  
-  fn signal_bit() -> T;
-}
-
-impl<T> FloatFormat<T> for Float<T> 
-  where Float<T>: FloatConstant<T>,
-        T: From<u8> + From<bool> + Add<Output=T> + Sub<Output=T> + Shr<Output=T> + Shl<Output=T> + BitAnd<Output=T> + BitOr<Output=T> + PartialEq + Clone + Copy
+pub(crate) fn sig<T>(v: Float<T>) -> T::BaseType
+  where T: FloatFormat
 {
-  fn sig(self) -> T {
-    let mask = (T::from(1) << Float::<T>::sig_width()) - T::from(1);
-    self.v & mask
-  }
-  
-  fn exp(self) -> T {
-    let shifted = self.v >> Float::<T>::sig_width();
-    let mask = (T::from(1) << Float::<T>::exp_width()) - T::from(1);
+    let v = T::BaseType::from(v);
+    let mask = (T::BaseType::from(1) << T::sig_width()) - T::BaseType::from(1);
+    T::BaseType::from(v) & mask
+}
+
+pub(crate) fn exp<T>(v: T) -> T::BaseType
+  where T: FloatFormat
+{
+    let v = T::BaseType::from(v);
+    let shifted = T::BaseType::from(v) >> T::BaseType::try_from(T::sig_width()).unwrap();
+    let mask = (T::BaseType::from(1) << T::BaseType::try_from(T::exp_width()).unwrap()) - T::BaseType::from(1);
     shifted & mask
-  }
+}
 
-  fn sign(self) -> bool {
-    let mask = T::from(1) << (Float::<T>::exp_width() + Float::<T>::sig_width());
-    (self.v & mask) != T::from(0)
-  }
+pub(crate) fn sign<T>(v: Float<T>) -> bool
+  where T: FloatFormat
+{
+    let v = T::BaseType::from(v);
+    let mask = T::BaseType::from(1) << T::BaseType::try_from((T::exp_width() + T::sig_width())).unwrap();
+    (T::BaseType::from(v) & mask) != T::BaseType::from(0)
+}
 
-  fn is_nan(self) -> bool {    
-    is_max_exp(self) && !is_zero_sig(self)    
-  }
+pub(crate) fn bias<T: FloatFormat>() -> T::BaseType {
+    let exp_width = T::BaseType::try_from(T::exp_width()).unwrap();
+    (T::BaseType::from(1) << (exp_width - T::BaseType::from(1))) - T::BaseType::from(1)
+}
 
-  fn is_signal_nan(self) -> bool {
-    is_max_exp(self) && !is_zero_sig(self) && is_signal_sig(self)
-  }
-  
-  fn is_inf(self) -> bool {
-    is_max_exp(self) && is_zero_sig(self) 
-  }
+pub(crate) fn is_nan<T>(v: Float<T>) -> bool
+  where T: FloatFormat
+{
+    is_max_exp(v) && !is_zero_sig(v)
+}
 
-  fn is_zero(self) -> bool {
-    is_zero_exp(self) && is_zero_sig(self)      
-  }
+pub(crate) fn is_signal_nan<T>(v: Float<T>) -> bool
+  where T: FloatFormat
+{
+    is_max_exp(v) && !is_zero_sig(v) && is_signal_sig(v)
+}
 
-  fn is_subnormal(self) -> bool {
-    is_zero_exp(self) && !is_zero_sig(self)      
-  }
-  
-  fn new(sign: bool, exp: T, sig: T) -> Float<T> {    
+pub(crate) fn is_inf<T>(v: Float<T>) -> bool
+  where T: FloatFormat
+{
+    is_max_exp(v) && is_zero_sig(v)
+}
+
+pub(crate) fn is_zero<T>(v: Float<T>) -> bool
+    where T: FloatFormat
+{
+    is_zero_exp(v) && is_zero_sig(v)
+}
+
+pub(crate) fn is_subnormal<T>(v: Float<T>) -> bool
+    where T: FloatFormat
+{
+    is_zero_exp(v) && !is_zero_sig(v)
+}
+
+/*
+fn new(sign: bool, exp: T, sig: T) -> Float<T> {
     let sign = T::from(sign) << (Float::<T>::sig_width() + Float::<T>::exp_width());
     let exp_mask = (T::from(1) << Float::<T>::exp_width()) - T::from(1);
     let exp = (exp & exp_mask) << Float::<T>::sig_width();
@@ -93,73 +71,78 @@ impl<T> FloatFormat<T> for Float<T>
     let sig = sig & sig_mask;
 
     Float::<T> { v: sign | exp | sig }
-  }
+}
 
-  fn construct(v: T) -> Float<T> { Float::<T> { v } }
+fn construct(v: T) -> Float<T> { Float::<T> { v } }
+*/
 
-  fn default_nan() -> Float<T> {
-    let sig = T::from(1) << (Float::<T>::sig_width() - T::from(1));
+pub(crate) fn default_nan<T>() -> Float<T>
+    where T: FloatFormat
+{
+    let sig = T::BaseType::from(1) << (T::BaseType::try_from(T::sig_width()).unwrap() - T::BaseType::from(1));
     Float::<T>::new(true, exp_max::<T>(), sig)
-  }
-
-  fn zero(sign: bool) -> Float<T> {
-    Float::<T>::new(sign, T::from(0), T::from(0))
-  }
-
-  fn infinite(sign: bool) -> Float<T> {
-    Float::<T>::new(sign, exp_max::<T>(), T::from(0))
-  }
-
-  fn hidden_bit() -> T {
-    T::from(1) << Float::<T>::sig_width()
-  }  
-
-  fn signal_bit() -> T {
-    T::from(1) << (Float::<T>::sig_width() - T::from(1))
-  }
 }
 
-pub(crate) fn exp_max<T>() -> T 
-  where Float<T>: FloatFormat<T> + FloatConstant<T>, 
-        T: Sub<Output=T> + Shl<Output=T> + From<u8>
+pub(crate) fn zero<T>(sign: bool) -> Float<T>
+    where T: FloatFormat
 {
-  let width = Float::<T>::exp_width();
-  (T::from(1) << width) - T::from(1)
+    Float::<T>::new(sign, T::BaseType::from(0), T::BaseType::from(0))
 }
 
-pub(crate) fn sig_max<T>() -> T 
-  where Float<T>: FloatFormat<T> + FloatConstant<T>,
-        T: Sub<Output=T> + Shl<Output=T> + From<u8> + From<bool>
+pub(crate) fn infinite<T>(sign: bool) -> Float<T>
+    where T: FloatFormat
 {
-  let width = Float::<T>::sig_width();
-  (T::from(1) << width) - T::from(1)
+    Float::<T>::new(sign, exp_max::<T>(), T::BaseType::from(0))
+}
+
+pub(crate) fn hidden_bit<T>() -> T::BaseType
+    where T: FloatFormat
+{
+    T::BaseType::from(1) << T::BaseType::try_from(T::sig_width()).unwrap()
+}
+
+pub(crate) fn signal_bit<T>() -> T::BaseType
+    where T:FloatFormat
+{
+    T::BaseType::from(1) << (T::BaseType::try_from(T::sig_width()).unwrap() - T::BaseType::from(1))
+}
+
+
+pub(crate) fn exp_max<T>() -> T::BaseType
+    where T: FloatFormat
+{
+    let width = T::BaseType::try_from(T::exp_width()).unwrap();
+    (T::BaseType::from(1) << width) - T::BaseType::from(1)
+}
+
+pub(crate) fn sig_max<T>() -> T::BaseType
+    where T: FloatFormat,
+{
+    let width = T::BaseType::try_from(T::sig_width()).unwrap();
+    (T::BaseType::from(1) << width) - T::BaseType::from(1)
 }
 
 pub(crate) fn is_max_exp<T>(f: Float<T>) -> bool
-  where Float<T>: FloatFormat<T> + FloatConstant<T>,
-        T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq
+    where T: FloatFormat,
 {
-  f.exp() == exp_max::<T>()
+    exp(f) == exp_max()
 }
 
 pub(crate) fn is_zero_exp<T>(f: Float<T>) -> bool
-where Float<T>: FloatFormat<T>,
-T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq
+    where T: FloatFormat,
 {
-  f.exp() == T::from(0)
+    exp(f) == T::BaseType::from(0)
 }
 
 pub(crate) fn is_zero_sig<T>(f: Float<T>) -> bool
-where Float<T>: FloatFormat<T>,
-T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq
+    where T: FloatFormat,
 {
-  f.sig() == T::from(0)
+    sig(f) == T::BaseType::from(0)
 }
 
 pub(crate) fn is_signal_sig<T>(f: Float<T>) -> bool
-  where Float<T>: FloatFormat<T> + FloatConstant<T>,
-  T: Sub<Output=T> + Shl<Output=T> + From<u8> + PartialEq + BitAnd<Output=T>
-{ 
-  let mask = T::from(1) << (Float::<T>::sig_width() - T::from(1));
-  (f.sig() & mask) == T::from(0)
+    where T: FloatFormat
+{
+    let mask = T::BaseType::from(1) << (T::sig_width() - T::BaseType::from(1));
+    (sig(f) & mask) == T::BaseType::from(0)
 }

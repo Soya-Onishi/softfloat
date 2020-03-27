@@ -1,18 +1,18 @@
 extern crate either;
 
-use std::ops::{Add, Sub, Mul, BitAnd, BitOr, Not, Shl, Shr, Neg};
-use std::cmp::{PartialEq, PartialOrd};
+use std::ops::Mul;
 use std::convert::TryFrom;
 use either::Either;
 use crate::{
     Float,
+    FloatFormat,
     RoundingMode,
     Exception
 };
 use crate::constant::*;
 use crate::util::*;
 
-impl Mul for Float<u32> {
+impl<T: FloatFormat> Mul for Float<T> {
   type Output = Self;
 
   fn mul(self, other: Self) -> Self {
@@ -20,27 +20,20 @@ impl Mul for Float<u32> {
   }
 }
 
-pub(crate) fn mul_impl<A, B, C>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception)
-    where Float<A>: FloatConstant<A> + FloatFormat<A>,          
-          A : Extends<Output=C> + TryFrom<B> + TryFrom<C> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Mul<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + LeadingZeros + BitWidth + Clone + Copy,
-          B : TryFrom<A> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
-          C: From<u8> + From<bool> + PartialEq + PartialOrd + Sub<Output=C> + Mul<Output=C> + Shr<Output=C> + Shl<Output=C> + BitAnd<Output=C> + BitOr<Output=C> + BitWidth + Clone + Copy,
-          <A as TryFrom<B>>::Error: std::fmt::Debug,
-          <A as TryFrom<C>>::Error: std::fmt::Debug,
-          B::Error: std::fmt::Debug,
+pub(crate) fn mul_impl<T: FloatFormat>(fx: Float<T>, fy: Float<T>, mode: RoundingMode) -> (Float<T>, Exception)
 {   
-    let try_mul_inf_or_nan = |sign: bool, f: Float<A>, g: Float<A>| -> Option<(Float<A>, Exception)> {        
-        if f.is_inf() && !g.is_nan() { 
-            if g.is_zero() { Some((Float::default_nan(), Exception::invalid())) }
-            else { Some((Float::<A>::infinite(sign), Exception::none())) }
-        } else if f.is_nan() || g.is_nan() {
+    let try_mul_inf_or_nan = |sign: bool, f: Float<T>, g: Float<T>| -> Option<(Float<T>, Exception)> {
+        if is_inf(f) && !is_nan(g) {
+            if is_zero(g) { Some((default_nan(), Exception::invalid())) }
+            else { Some((infinite(sign), Exception::none())) }
+        } else if is_nan(f) || is_nan(g) {
             Some(propagate_nan(f, g))
         } else {
             None
         }
     };
 
-    let sign = fx.sign() ^ fy.sign();
+    let sign = sign(fx) ^ sign(fy);
 
     match try_mul_inf_or_nan(sign, fx, fy) {
         Some(f) => return f,
@@ -53,7 +46,7 @@ pub(crate) fn mul_impl<A, B, C>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) 
     }
 
     // zero multiplication derive zero
-    let (exp_a, sig_a) = match make_exp_sig::<A, B>(sign, fx) {
+    let (exp_a, sig_a) = match make_exp_sig(sign, fx) {
         Either::Left(zero) => return zero,
         Either::Right(pair) => pair,
     };
@@ -67,13 +60,7 @@ pub(crate) fn mul_impl<A, B, C>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) 
     pack(sign, exp, sig, mode)
 }
 
-fn ext_mul<A, B, C, D, E>(sig_a: A, exp_a: B, sig_b: A, exp_b: B) -> (B, A) 
-    where Float<A>: FloatConstant<A>,          
-          A: Extends<Output=C> + TryFrom<C, Error=D> + From<u8> + Sub<Output=A> + Shl<Output=A> + Clone + Copy,
-          B: Add<Output=B> + Sub<Output=B> + TryFrom<A, Error=E> + Clone + Copy,
-          C: From<u8> + From<bool> + PartialEq + PartialOrd + Sub<Output=C> + Mul<Output=C> + Shr<Output=C> + Shl<Output=C> + BitAnd<Output=C> + BitOr<Output=C> + BitWidth + Clone + Copy,
-          D: std::fmt::Debug,
-          E: std::fmt::Debug,
+fn ext_mul<T: FloatFormat>(sig_a: T::BaseType, exp_a: T::SignedType, sig_b: T::BaseType, exp_b: T::SignedType) -> (T::SignedType, T::BaseType)
 {   
     /*
       Why SIG_WIDTH_F32 - ROUND_WITH ? not (SIG_WIDTH_F32 + 1) - ROUND_WITH ?
@@ -89,9 +76,9 @@ fn ext_mul<A, B, C, D, E>(sig_a: A, exp_a: B, sig_b: A, exp_b: B) -> (B, A)
       That's why exp need to be added by 1 in pack_float32.
       So, shifted must be 28 bit width.
     */
-    let mul_result = A::extend(sig_a) * A::extend(sig_b);
-    let exp = exp_a + exp_b - B::try_from(Float::<A>::bias()).unwrap();
-    let shifted = right_shift(mul_result, A::extend(Float::<A>::sig_width() - round_width()));
+    let mul_result = T::ExtendedType::from(sig_a) * T::ExtendedType::from(sig_b);
+    let exp = exp_a + exp_b - T::SignedType::try_from(bias()).unwrap();
+    let shifted = right_shift(mul_result, T::ExtendedType::from(T::BaseType::try_from(T::sig_width()).unwrap() - round_width()));
 
-    (exp, A::try_from(shifted).unwrap())
-  }
+    (exp, T::BaseType::try_from(shifted).unwrap())
+}

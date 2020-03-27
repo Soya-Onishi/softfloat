@@ -1,16 +1,16 @@
 
-use std::ops::{Add, Sub, BitAnd, BitOr, Not, Shl, Shr, Neg};
-use std::cmp::{PartialEq, PartialOrd};
+use std::ops::Add;
 use std::convert::TryFrom;
 use crate::{
   Float,
+  FloatFormat,
   RoundingMode,
   Exception,
 };
 use crate::constant::*;
 use crate::util::*;
 
-impl Add for Float<u32> {
+impl<T: FloatFormat> Add for Float<T> {
   type Output = Self;
 
   fn add(self, other: Self) -> Self {
@@ -18,51 +18,46 @@ impl Add for Float<u32> {
   }
 }
 
-pub(crate) fn add_impl<A, B>(fx: Float<A>, fy: Float<A>, mode: RoundingMode) -> (Float<A>, Exception) 
-where Float<A>: FloatConstant<A> + FloatFormat<A>,
-      A : TryFrom<B> + PartialEq + PartialOrd + Add<Output=A> + Sub<Output=A> + Shl<Output=A> + Shr<Output=A> + BitAnd<Output=A> + BitOr<Output=A> + Not<Output=A> + From<u8> + From<bool> + LeadingZeros + BitWidth + Clone + Copy,
-      B : TryFrom<A> + Add<Output=B> + Sub<Output=B> + Neg<Output=B> + From<u8> + PartialOrd + Clone + Copy,
-      A::Error : std::fmt::Debug,
-      B::Error : std::fmt::Debug,
+pub(crate) fn add_impl<T: FloatFormat>(fx: Float<T>, fy: Float<T>, mode: RoundingMode) -> (Float<T>, Exception)
 {
-  let (exp_diff, fa, fb) = if fx.exp() < fy.exp() {
-      (fy.exp() - fx.exp(), fy, fx)
+  let (exp_diff, fa, fb) = if exp(fx) < exp(fy) {
+      (exp(fy) - exp(fx), fy, fx)
   } else {
-      (fx.exp() - fy.exp(), fx, fy)
+      (exp(fx) - exp(fy), fx, fy)
   };
-  let sign = fx.sign();
+  let sign = sign(fx);
 
-  let sig_a_hidden = if fa.exp() == A::from(0) { A::from(0) } else { Float::<A>::hidden_bit() };
-  let sig_b_hidden = if fb.exp() == A::from(0) { A::from(0) } else { Float::<A>::hidden_bit() };
-  let sig_a = if fa.exp() == A::from(0) {
-    fa.sig() << (round_width::<A>() + A::from(1))
+  let sig_a_hidden = if exp(fa) == T::BaseType::from(0) { T::BaseType::from(0) } else { hidden_bit() };
+  let sig_b_hidden = if exp(fb) == T::BaseType::from(0) { T::BaseType::from(0) } else { hidden_bit() };
+  let sig_a = if exp(fa) == T::BaseType::from(0) {
+    sig(fa) << (round_width() + T::BaseType::from(1))
   } else {
-    (sig_a_hidden | fa.sig()) << round_width::<A>()
+    (sig_a_hidden | sig(fa)) << round_width()
   };
-  let sig_b = if fb.exp() == A::from(0) {
-    fb.sig() << (round_width::<A>() + A::from(1))
+  let sig_b = if exp(fb) == T::BaseType::from(0) {
+    sig(fb) << (round_width() + T::BaseType::from(1))
   } else {
-    (sig_b_hidden | fb.sig()) << round_width::<A>()
+    (sig_b_hidden | sig(fb)) << round_width()
   };
 
-  if fa.exp() == A::from(0) && fb.exp() == A::from(0) {
-    let fc_sig = fa.sig() + fb.sig();
-    let exp = fc_sig >> Float::<A>::sig_width();
-    let sig = fc_sig & ((A::from(1) << Float::<A>::sig_width()) - A::from(1));
+  if exp(fa) == T::BaseType::from(0) && exp(fb) == T::BaseType::from(0) {
+    let fc_sig = sig(fa) + sig(fb);
+    let exp = fc_sig >> T::sig_width();
+    let sig = fc_sig & ((T::BaseType::from(1) << T::sig_width()) - T::BaseType::from(1));
 
     return (
-        Float::<A>::new(fx.sign(), exp, sig),
+        Float::<T>::new(sign(fx), exp, sig),
         Exception::none(),
     );
   }
 
-  if fx.is_nan() || fy.is_nan() { return propagate_nan(fx, fy) }
-  if fx.is_inf() { return (fx, Exception::none()) }
-  if fy.is_inf() { return (Float::<A>::infinite(sign), Exception::none())}  
+  if is_nan(fx) || is_nan(fy) { return propagate_nan(fx, fy) }
+  if is_inf(fx) { return (fx, Exception::none()) }
+  if is_inf(fy) { return (infinite(sign), Exception::none())}
 
-  let exp = fa.exp();
+  let exp = exp(fa);
   let sig_b = right_shift(sig_b, exp_diff);
   let sig = sig_a + sig_b;
 
-  pack(sign, B::try_from(exp).unwrap(), sig, mode)
+  pack(sign, T::SignedType::try_from(exp).unwrap(), sig, mode)
 }
