@@ -9,10 +9,18 @@ use crate::{
     RoundingMode,
     Exception
 };
-use crate::constant::*;
-use crate::util::*;
 
-impl<T: FloatFormat> Mul for Float<T> {
+impl<T> Mul for Float<T>
+where
+    T: FloatFormat,
+    T::BaseType: TryFrom<usize> + TryFrom<T::ExtendedType> + TryFrom<T::SignedType> + From<u8> + From<bool>,
+    T::ExtendedType: From<u8> + From<bool> + From<T::BaseType>,
+    T::SignedType: From<u8> + From<bool> + TryFrom<T::BaseType>,
+    <T::BaseType as TryFrom<usize>>::Error: std::fmt::Debug,
+    <T::BaseType as TryFrom<T::ExtendedType>>::Error: std::fmt::Debug,
+    <T::BaseType as TryFrom<T::SignedType>>::Error: std::fmt::Debug,
+    <T::SignedType as TryFrom<T::BaseType>>::Error: std::fmt::Debug,
+{
   type Output = Self;
 
   fn mul(self, other: Self) -> Self {
@@ -20,20 +28,29 @@ impl<T: FloatFormat> Mul for Float<T> {
   }
 }
 
-pub(crate) fn mul_impl<T: FloatFormat>(fx: Float<T>, fy: Float<T>, mode: RoundingMode) -> (Float<T>, Exception)
+pub(crate) fn mul_impl<T>(fx: Float<T>, fy: Float<T>, mode: RoundingMode) -> (Float<T>, Exception)
+    where
+        T: FloatFormat,
+        T::BaseType: TryFrom<usize> + TryFrom<T::ExtendedType> + TryFrom<T::SignedType> + From<u8> + From<bool>,
+        T::ExtendedType: From<u8> + From<bool> + From<T::BaseType>,
+        T::SignedType: From<u8> + From<bool> + TryFrom<T::BaseType>,
+        <T::BaseType as TryFrom<usize>>::Error: std::fmt::Debug,
+        <T::BaseType as TryFrom<T::ExtendedType>>::Error: std::fmt::Debug,
+        <T::BaseType as TryFrom<T::SignedType>>::Error: std::fmt::Debug,
+        <T::SignedType as TryFrom<T::BaseType>>::Error: std::fmt::Debug,
 {   
     let try_mul_inf_or_nan = |sign: bool, f: Float<T>, g: Float<T>| -> Option<(Float<T>, Exception)> {
-        if is_inf(f) && !is_nan(g) {
-            if is_zero(g) { Some((default_nan(), Exception::invalid())) }
-            else { Some((infinite(sign), Exception::none())) }
-        } else if is_nan(f) || is_nan(g) {
-            Some(propagate_nan(f, g))
+        if f.is_inf() && !g.is_nan() {
+            if g.is_zero() { Some((Float::<T>::default_nan(), Exception::invalid())) }
+            else { Some((Float::<T>::infinite(sign), Exception::none())) }
+        } else if f.is_nan() || g.is_nan() {
+            Some(Float::<T>::propagate_nan(f, g))
         } else {
             None
         }
     };
 
-    let sign = sign(fx) ^ sign(fy);
+    let sign = fx.sign() ^ fy.sign();
 
     match try_mul_inf_or_nan(sign, fx, fy) {
         Some(f) => return f,
@@ -46,21 +63,30 @@ pub(crate) fn mul_impl<T: FloatFormat>(fx: Float<T>, fy: Float<T>, mode: Roundin
     }
 
     // zero multiplication derive zero
-    let (exp_a, sig_a) = match make_exp_sig(sign, fx) {
+    let (exp_a, sig_a) = match Float::<T>::make_exp_sig(sign, fx) {
         Either::Left(zero) => return zero,
         Either::Right(pair) => pair,
     };
 
-    let (exp_b, sig_b) = match make_exp_sig(sign, fy) {
+    let (exp_b, sig_b) = match Float::<T>::make_exp_sig(sign, fy) {
         Either::Left(zero) => return zero,
         Either::Right(pair) => pair,
     };
 
-    let (exp, sig) = ext_mul(sig_a, exp_a, sig_b, exp_b);
-    pack(sign, exp, sig, mode)
+    let (exp, sig) = ext_mul::<T>(sig_a, exp_a, sig_b, exp_b);
+    Float::<T>::pack(sign, exp, sig, mode)
 }
 
-fn ext_mul<T: FloatFormat>(sig_a: T::BaseType, exp_a: T::SignedType, sig_b: T::BaseType, exp_b: T::SignedType) -> (T::SignedType, T::BaseType)
+fn ext_mul<T>(sig_a: T::BaseType, exp_a: T::SignedType, sig_b: T::BaseType, exp_b: T::SignedType) -> (T::SignedType, T::BaseType)
+    where
+        T: FloatFormat,
+        T::BaseType: TryFrom<usize> + TryFrom<T::ExtendedType> + TryFrom<T::SignedType> + From<u8> + From<bool>,
+        T::ExtendedType: From<u8> + From<bool> + From<T::BaseType>,
+        T::SignedType: From<u8> + From<bool> + TryFrom<T::BaseType>,
+        <T::BaseType as TryFrom<usize>>::Error: std::fmt::Debug,
+        <T::BaseType as TryFrom<T::ExtendedType>>::Error: std::fmt::Debug,
+        <T::BaseType as TryFrom<T::SignedType>>::Error: std::fmt::Debug,
+        <T::SignedType as TryFrom<T::BaseType>>::Error: std::fmt::Debug,
 {   
     /*
       Why SIG_WIDTH_F32 - ROUND_WITH ? not (SIG_WIDTH_F32 + 1) - ROUND_WITH ?
@@ -77,8 +103,8 @@ fn ext_mul<T: FloatFormat>(sig_a: T::BaseType, exp_a: T::SignedType, sig_b: T::B
       So, shifted must be 28 bit width.
     */
     let mul_result = T::ExtendedType::from(sig_a) * T::ExtendedType::from(sig_b);
-    let exp = exp_a + exp_b - T::SignedType::try_from(bias()).unwrap();
-    let shifted = right_shift(mul_result, T::ExtendedType::from(T::BaseType::try_from(T::sig_width()).unwrap() - round_width()));
+    let exp = exp_a + exp_b - T::SignedType::try_from(Float::<T>::bias()).unwrap();
+    let shifted = Float::<T>::right_shift::<T::ExtendedType>(mul_result, T::ExtendedType::from(T::sig_width() - Float::<T>::round_width()));
 
     (exp, T::BaseType::try_from(shifted).unwrap())
 }
